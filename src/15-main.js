@@ -1,4 +1,4 @@
-// AERODROME :: src/15-main.js :: v1.0.0
+// AERODROME :: src/15-main.js :: v1.4.1
 // The application: one fixed step loop, one render order, one control map.
 // Depends on every other file. Loads last.
 // GPL-3.0
@@ -17,7 +17,6 @@
     frame: 0,
     fps: 60,
     frameMs: 0,
-    engineOn: true,
     rig: null,
     state: null,
     env: null,
@@ -30,6 +29,7 @@
     S.load();
     S.bumpBuild();
     S.applyTuning();
+    if (S.state.world) { W.loadWorld(S.state.world); } else { W.build(); }
     X.buildThermals();
 
     var canvas = document.getElementById('screen');
@@ -54,7 +54,10 @@
       A.resume();
       A.setMuted(S.state.settings.muted);
       A.setVolume(S.state.settings.volume);
-      if (app.state) { A.setEnginePatch(app.state.ac.audio.patch); }
+      if (app.state) {
+        A.setEnginePatch(app.state.ac.audio.patch);
+        A.setEngineLayer(app.state.ac.audio.layer ? app.state.ac.audio.layer.patch : null);
+      }
       window.removeEventListener('pointerdown', wake);
       window.removeEventListener('keydown', wake);
     };
@@ -66,6 +69,9 @@
       app.setReducedMotion(true);
     }
 
+    if (S.state.build <= 1) {
+      U.showFirstRun();
+    }
     canvas.focus();
     app.last = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     requestAnimationFrame(app.frameStep);
@@ -99,6 +105,35 @@
     S.save();
   };
 
+  // World files. Loading one rebuilds the valley and puts the aircraft back
+  // on the runway, since the runway it was standing on may have moved.
+  app.loadWorldFile = function (parsed) {
+    var res = W.loadWorld(parsed);
+    if (!res.ok) {
+      U.setStatus('World refused: ' + res.reason, 'warn');
+      return res;
+    }
+    S.state.world = AERO.util.deepCopy(W.params);
+    S.save();
+    app.rig.viewAim = null;
+    app.rig.viewIndex = 0;
+    app.respawn('runway');
+    U.markWorld();
+    U.setStatus('Loaded ' + W.params.name);
+    return res;
+  };
+
+  app.resetWorldFile = function () {
+    W.resetWorld();
+    S.state.world = null;
+    S.save();
+    app.rig.viewAim = null;
+    app.rig.viewIndex = 0;
+    app.respawn('runway');
+    U.markWorld();
+    U.setStatus('Back in the stock valley');
+  };
+
   app.persistWeather = function () {
     var w = S.state.settings.weather;
     Object.keys(w).forEach(function (k) { w[k] = X.state[k]; });
@@ -115,6 +150,7 @@
     C.applyAircraftDefaults(app.rig, ac);
     app.respawn(ac.contacts ? 'runway' : 'air', ac);
     A.setEnginePatch(ac.audio.patch);
+    A.setEngineLayer(ac.audio.layer ? ac.audio.layer.patch : null);
     S.save();
     if (!quiet) {
       U.refreshAircraft();
@@ -161,8 +197,8 @@
     }
     st.controls.gear = 1;
     app.state = st;
-    app.engineOn = true;
     app.rig.chaseInit = false;
+    app.releaseTow(true);
     app.log = { seconds: 0, maxAltM: 0, maxSpeedMps: 0, landings: 0, crashes: 0 };
     app.lastGround = st.onGround;
     if (U.buildTuneRows) { U.buildTuneRows(); }
@@ -227,6 +263,109 @@
     S.save();
   };
 
+  // ------------------------------------------------------------------ tow
+  // An aerotow for the sailplane. The tug flies a scripted profile and the
+  // rope is a spring that pulls and never pushes, so it goes slack in a climb
+  // and snatches when the glider falls behind.
+  app.tow = { active: false, pos: null, vel: null, quat: null, time: 0, tension: 0 };
+
+  app.startTow = function () {
+    var st = app.state;
+    if (!st.ac.towable || app.tow.active) { return false; }
+    var fwd = Q.rotate(st.quat, { x: 1, y: 0, z: 0 });
+    var spec = st.ac.towable;
+    app.tow.active = true;
+    app.tow.time = 0;
+    app.tow.pos = V.add(st.pos, V.scale(V.norm(fwd), spec.restLen));
+    app.tow.vel = V.copy(st.vel);
+    app.tow.quat = Q.copy(st.quat);
+    app.tow.tension = 0;
+    U.setStatus('Tug rolling. Keep it straight, press T to release.');
+    A.blip(660, 0.08);
+    return true;
+  };
+
+  app.releaseTow = function (quiet) {
+    if (!app.tow.active) { return; }
+    app.tow.active = false;
+    app.env.extraForce = null;
+    if (!quiet) {
+      U.setStatus('Released. Go and find the ridge.');
+      A.blip(420, 0.1);
+    }
+  };
+
+  function updateTow(st, dt) {
+    if (!app.tow.active) { return; }
+    var spec = st.ac.towable;
+    app.tow.time += dt;
+    // Tug profile: accelerate down the runway, rotate, then a steady climb
+    // into wind at a fixed rate.
+    // The tug feels the rope. If the glider is dragging, the tug eases off
+    // rather than tearing the rope out of it, which is what a tug pilot does.
+    var strain = M.clamp(app.tow.tension / spec.maxN, 0, 1);
+    var ease = M.clamp((strain - 0.45) / 0.55, 0, 1);
+    var target = M.clamp(app.tow.time * 9, 0, 33) * (1 - 0.35 * ease);
+    // The tug rotates when it has flying speed, not when it has height. The
+    // earlier version gated the climb on altitude, which meant it could never
+    // start climbing, and the glider just kited on the end of the rope.
+    var tugSpeed = Math.sqrt(app.tow.vel.x * app.tow.vel.x + app.tow.vel.z * app.tow.vel.z);
+    var climb = (tugSpeed > 24) ? 4.2 * (1 - 0.7 * ease) : 0;
+    var dir = V.norm({ x: app.tow.vel.x, y: 0, z: app.tow.vel.z });
+    if (V.len2(dir) < 1e-6) { dir = Q.rotate(app.tow.quat, { x: 1, y: 0, z: 0 }); dir.y = 0; dir = V.norm(dir); }
+    var want = { x: dir.x * target, y: climb, z: dir.z * target };
+    var k = M.clamp(dt * 1.4, 0, 1);
+    app.tow.vel = {
+      x: M.lerp(app.tow.vel.x, want.x, k),
+      y: M.lerp(app.tow.vel.y, want.y, k),
+      z: M.lerp(app.tow.vel.z, want.z, k)
+    };
+    app.tow.pos = V.add(app.tow.pos, V.scale(app.tow.vel, dt));
+    if (app.tow.pos.y < W.heightAt(app.tow.pos.x, app.tow.pos.z) + 1.4) {
+      app.tow.pos.y = W.heightAt(app.tow.pos.x, app.tow.pos.z) + 1.4;
+    }
+    app.tow.quat = Q.fromBasis(V.len2(app.tow.vel) > 1 ? app.tow.vel : dir, { x: 0, y: 1, z: 0 });
+
+    var f = F.ropeForce(st.pos, st.vel, app.tow.pos, app.tow.vel,
+      spec.restLen, spec.k, spec.c, spec.maxN);
+    app.tow.tension = V.len(f);
+    app.env.extraForce = f;
+    // The rope breaks if the glider gets badly out of position, and the tug
+    // lets go once the glider is high enough to be someone else's problem.
+    if (app.tow.tension >= spec.maxN * 0.999) {
+      app.releaseTow(true);
+      U.setStatus('Rope parted. That is what the weak link is for.');
+    } else if (st.pos.y - W.RUNWAY.elev > spec.releaseAltM) {
+      app.releaseTow(true);
+      U.setStatus('Tug waved you off at ' + Math.round(st.pos.y) + ' m.');
+    }
+  }
+
+  // Two small wrappers so the quickbar buttons and the key events go through
+  // exactly the same path.
+  app.toggleTow = function () {
+    var st = app.state;
+    if (app.tow.active) { app.releaseTow(); }
+    else if (!st.ac.towable) { U.setStatus('Nothing here needs a tow.'); }
+    else if (!st.onGround) { U.setStatus('Land first. A tug cannot reach you up there.'); }
+    else { app.startTow(); }
+    U.markContextual();
+  };
+
+  app.toggleEngine = function () {
+    var st = app.state;
+    if (st.engineState === 'running') {
+      F.cutEngine(st);
+      U.setStatus('Engine cut. Fly it down.');
+      A.blip(300, 0.12);
+    } else if (st.engineState === 'off') {
+      F.startEngine(st);
+      U.setStatus('Cranking. Give it a couple of seconds.');
+      A.blip(420, 0.08);
+    }
+    U.markContextual();
+  };
+
   // ---------------------------------------------------------- control map
   // One mapping, driven by capability flags. No aircraft is special cased.
   function applyControls(st, axes, dt) {
@@ -247,7 +386,7 @@
       }
       if (ac.rotor.powered) {
         c.collective = axes.throttle;
-        c.throttle = app.engineOn ? 1 : 0;
+        c.throttle = 1;
       }
     }
     if (ac.reaction) {
@@ -255,7 +394,6 @@
       c.liftX = axes.liftX;
       c.liftY = axes.liftY;
     }
-    if (!app.engineOn && !ac.rotor) { c.throttle = 0; }
     if (ac.flapping) { c.throttle = axes.throttle; }
   }
 
@@ -271,11 +409,8 @@
       else if (id === 'reset') { app.respawn(app.lastSpawn === 'runway' ? 'runway' : 'air'); U.setStatus('Reset'); }
       else if (id === 'gear') { c.gear = c.gear > 0.5 ? 0 : 1; A.blip(520, 0.06); }
       else if (id === 'flaps') { c.flap = (c.flap >= 0.99) ? 0 : Math.min(1, c.flap + 0.34); A.blip(700, 0.05); }
-      else if (id === 'engineCut') {
-        app.engineOn = !app.engineOn;
-        U.setStatus(app.engineOn ? 'Engine running' : 'Engine cut. Fly it down.');
-        A.blip(app.engineOn ? 900 : 300, 0.09);
-      }
+      else if (id === 'tow') { app.toggleTow(); }
+      else if (id === 'engineCut') { app.toggleEngine(); }
     }
   }
 
@@ -292,17 +427,24 @@
     G.resetQueue();
     W.emit(cam, env, app.time, app.frame);
     G.submitMesh(cam, st.ac.mesh, st.pos, st.quat, { light: env.sunDir, ambient: env.ambient });
-    // A cheap contact shadow so low passes read as low passes.
-    var agl = st.derived.agl;
-    if (agl < 240) {
-      var gh = W.heightAt(st.pos.x, st.pos.z) + 0.15;
-      var r = 2 + (st.ac.wing ? st.ac.wing.spanM * 0.35 : 3);
+    // The tug and the rope, drawn only while a tow is running.
+    if (app.tow.active) {
+      var tug = AC.byId('trainer');
+      G.submitMesh(cam, tug.mesh, app.tow.pos, app.tow.quat, { light: env.sunDir, ambient: env.ambient });
+      var a = st.pos, b = app.tow.pos;
+      var side = V.norm(V.cross(V.sub(b, a), { x: 0, y: 1, z: 0 }));
       G.submitFace(cam, [
-        { x: st.pos.x - r, y: gh, z: st.pos.z - r * 1.6 },
-        { x: st.pos.x + r, y: gh, z: st.pos.z - r * 1.6 },
-        { x: st.pos.x + r, y: gh, z: st.pos.z + r * 1.6 },
-        { x: st.pos.x - r, y: gh, z: st.pos.z + r * 1.6 }
-      ], 'shadow', { twoSided: true, noHaze: false });
+        { x: a.x + side.x * 0.09, y: a.y + 0.2, z: a.z + side.z * 0.09 },
+        { x: b.x + side.x * 0.09, y: b.y - 0.6, z: b.z + side.z * 0.09 },
+        { x: b.x - side.x * 0.09, y: b.y - 0.6, z: b.z - side.z * 0.09 },
+        { x: a.x - side.x * 0.09, y: a.y + 0.2, z: a.z - side.z * 0.09 }
+      ], 'dark', { twoSided: true, noHaze: true, ambient: 1, bias: 1 });
+    }
+    // Contact shadow, drawn as the aircraft's own silhouette on the ground.
+    var agl = st.derived.agl;
+    if (agl < 260 && agl > -2) {
+      G.submitShadow(cam, st.ac.mesh, st.pos, st.quat,
+        W.heightAt(st.pos.x, st.pos.z) + 0.12, { light: env.sunDir, ambient: env.ambient });
     }
     G.flushQueue();
     W.emitSprites(cam, env, app.time, app.frame);
@@ -312,7 +454,10 @@
       gear: st.controls.gear, flap: st.controls.flap, brake: st.controls.brake,
       spoiler: st.controls.spoiler, burner: st.controls.burner,
       lowFuel: st.ac.fuelKg ? (st.fuel / st.ac.fuelKg) < 0.15 : false,
-      onGround: st.onGround, engineOn: app.engineOn
+      onGround: st.onGround,
+      engineOff: st.engineState === 'off',
+      starting: st.engineState === 'starting',
+      groundEffect: d.groundEffect
     };
     if (rig.mode === 'cockpit') {
       I.drawPanel(st.ac, d, app.time, opts);
@@ -350,9 +495,12 @@
     if (!app.paused) {
       app.time += dt;
       var env = X.tick(dt);
+      W.tickMovers(dt);
       env.wind = X.windAt(st.pos, app.time, st.ac.gustFactor || 1);
       app.env = env;
       applyControls(st, axes, dt);
+      app.env.extraForce = null;
+      updateTow(st, dt);
       // Fixed step physics with an accumulator so the model does not care
       // what the display is doing.
       accum += dt;
@@ -389,9 +537,28 @@
     drawScene();
 
     var d = st.derived, ac = st.ac;
+    // Listener velocity, so a chase pass actually shifts in pitch. In the
+    // cockpit the listener and the source are the same thing and this is 1.
+    var camPos = app.rig.cam.pos;
+    if (!app.lastCamPos) { app.lastCamPos = V.copy(camPos); }
+    var camVel = V.scale(V.sub(camPos, app.lastCamPos), 1 / Math.max(0.001, dt));
+    app.lastCamPos = V.copy(camPos);
+    var engineHz = (ac.audio.base || 20) + st.rpm * (ac.audio.hzPerRPM || 0.05);
+    var running = st.engineState === 'running' ? 1 : (st.engineState === 'starting' ? 0.35 : 0);
+    var layer = ac.audio.layer;
     A.update({
-      engineHz: (ac.audio.base || 20) + st.rpm * (ac.audio.hzPerRPM || 0.05),
-      engineLevel: app.paused ? 0 : (ac.audio.level || 0.5) * (0.25 + 0.75 * st.controls.throttle) * (app.engineOn ? 1 : 0),
+      listener: { pos: camPos, vel: camVel },
+      source: { pos: st.pos, vel: st.vel },
+      layerHz: layer ? engineHz * layer.mul : 0,
+      layerLevel: layer ? layer.level * (0.3 + 0.7 * st.controls.throttle) * running * (app.paused ? 0 : 1) : 0,
+      // Buffet builds as the wing runs out of margin, rumble is the wheels.
+      buffet: app.paused ? 0 : M.clamp((d.stalled ? 1 : 0) * 0.8
+        + M.clamp(1 - d.stallMargin * 1.6, 0, 1) * 0.5, 0, 1),
+      rumble: (!app.paused && st.onGround)
+        ? M.clamp(d.groundspeed / 34, 0, 1) * (1 - 0.5 * (st.controls.gear < 0.5 ? 1 : 0)) : 0,
+      engineHz: engineHz,
+      engineLevel: app.paused ? 0
+        : (ac.audio.level || 0.5) * (0.25 + 0.75 * st.controls.throttle) * running,
       airspeed: d.airspeed,
       rotorLevel: ac.rotor ? 0.5 * M.clamp(st.rotorRPM / (ac.rotor.nominalRPM || 400), 0, 1.2) : 0,
       rotorHz: ac.rotor ? st.rotorRPM / 60 : 0,
@@ -400,7 +567,11 @@
     });
 
     uiTimer += dt;
-    if (uiTimer > 0.4) { uiTimer = 0; U.tickReadouts(); }
+    if (uiTimer > 0.4) {
+      uiTimer = 0;
+      U.tickReadouts();
+      U.markContextual();
+    }
     saveTimer += dt;
     if (saveTimer > 15) { saveTimer = 0; app.persistWeather(); }
 

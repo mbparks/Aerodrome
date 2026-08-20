@@ -1,4 +1,4 @@
-// AERODROME :: src/03-render.js :: v1.0.0
+// AERODROME :: src/03-render.js :: v1.4.0
 // Fixed function 3D pipeline: transform, near clip, painter sort, flat shade.
 // Depends on 00-core.js, 01-palette.js, 02-raster.js.
 // GPL-3.0
@@ -12,7 +12,6 @@
   G.NEAR = 0.35;
   G.FAR = 14000;
   G.wireframe = false;
-  G.showNormals = false;
   G.stats = { faces: 0, drawn: 0, sprites: 0, clipped: 0 };
 
   // Material to palette ramp. Flat shading picks the nearest ramp entry for a
@@ -30,7 +29,10 @@
     water: { ramp: 'water' },
     tarmac: { ramp: 'tarmac' },
     mark: { ramp: 'mark', flat: true },
-    shadow: { ramp: 'shadow', flat: true }
+    shadow: { ramp: 'shadow', flat: true },
+    lamp: { ramp: 'white', flat: true },
+    beacon: { ramp: 'red', flat: true },
+    window: { ramp: 'mark', flat: true }
   };
 
   // --------------------------------------------------------------- camera
@@ -113,6 +115,55 @@
     return out;
   }
 
+  // Sutherland Hodgman against the screen rectangle. Clamping coordinates was
+  // cheaper but distorted geometry that ran off the side of the screen, since
+  // a clamped vertex is in the wrong place rather than off the edge.
+  G.MARGIN = 2;
+
+  function clipEdge(pts, side, limit) {
+    var out = [], n = pts.length, i, a, b, ain, bin, t;
+    function inside(p) {
+      if (side === 0) { return p.x >= limit; }
+      if (side === 1) { return p.x <= limit; }
+      if (side === 2) { return p.y >= limit; }
+      return p.y <= limit;
+    }
+    for (i = 0; i < n; i++) {
+      a = pts[i]; b = pts[(i + 1) % n];
+      ain = inside(a); bin = inside(b);
+      if (ain) { out.push(a); }
+      if (ain !== bin) {
+        if (side < 2) {
+          t = (limit - a.x) / (b.x - a.x);
+          out.push({ x: limit, y: a.y + (b.y - a.y) * t });
+        } else {
+          t = (limit - a.y) / (b.y - a.y);
+          out.push({ x: a.x + (b.x - a.x) * t, y: limit });
+        }
+      }
+    }
+    return out;
+  }
+
+  G.clipScreen = function (pts) {
+    var m = G.MARGIN;
+    var lo = -m, hiX = R.W + m, hiY = R.H + m;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (var i = 0; i < pts.length; i++) {
+      if (pts[i].x < minX) { minX = pts[i].x; }
+      if (pts[i].x > maxX) { maxX = pts[i].x; }
+      if (pts[i].y < minY) { minY = pts[i].y; }
+      if (pts[i].y > maxY) { maxY = pts[i].y; }
+    }
+    if (maxX < lo || minX > hiX || maxY < lo || minY > hiY) { return null; }
+    if (minX >= lo && maxX <= hiX && minY >= lo && maxY <= hiY) { return pts; }
+    var out = clipEdge(pts, 0, lo);
+    if (out.length) { out = clipEdge(out, 1, hiX); }
+    if (out.length) { out = clipEdge(out, 2, lo); }
+    if (out.length) { out = clipEdge(out, 3, hiY); }
+    return out.length >= 3 ? out : null;
+  };
+
   // Submit one world space polygon. verts is an array of world points.
   G.submitFace = function (cam, verts, mat, opts) {
     opts = opts || {};
@@ -142,18 +193,17 @@
     var clipped = clipNear(vs);
     if (clipped.length < 3) { G.stats.clipped++; return; }
 
-    var pts = [], zsum = 0;
+    var pts = [], zsum = 0, zmin = Infinity;
     for (i = 0; i < clipped.length; i++) {
       var p = G.project(cam, clipped[i]);
-      if (p.x < -4000) { p.x = -4000; }
-      if (p.x > 4000) { p.x = 4000; }
-      if (p.y < -4000) { p.y = -4000; }
-      if (p.y > 4000) { p.y = 4000; }
       pts.push(p);
       zsum += clipped[i].z;
+      if (clipped[i].z < zmin) { zmin = clipped[i].z; }
     }
     var z = zsum / clipped.length;
     if (z > G.FAR) { return; }
+    pts = G.clipScreen(pts);
+    if (!pts) { G.stats.clipped++; return; }
 
     var color = G.shade(mat, nrm, opts.light, opts.ambient, opts.tint);
     // Distance haze, done by dithering toward the horizon band, never blended.
@@ -165,7 +215,11 @@
         dt = hz * 0.9;
       }
     }
-    push(pts, color, -z, db, dt);
+    // Painter order. Pure centroid depth loses badly when a large polygon
+    // overlaps a small near one, so the key leans on the nearest vertex.
+    // opts.bias breaks ties for coplanar work like runway markings.
+    var key = -(zmin * 0.6 + z * 0.4) + (opts.bias || 0);
+    push(pts, color, key, db, dt);
   };
 
   G.shade = function (mat, nrm, light, ambient, tint) {
@@ -358,23 +412,89 @@
       var tt = y / h;
       var half = Math.round(w / 2 * Math.sin(Math.PI * (0.25 + 0.75 * (1 - tt))));
       var shade = (variant && y > h * 0.6) ? lo : hi;
-      R.hlineDither(ly, Math.round(cx) - half, Math.round(cx) + half, shade, hi, 1 - tt * 0.6);
+      R.hlineDither(ly, Math.round(cx) - half, Math.round(cx) + half, shade, hi, 1 - tt * 0.6, 'soft');
     }
     G.stats.sprites++;
   };
 
   // A billboard sprite cell placed in the world, used for trees, birds and
   // distant traffic.
-  G.drawBillboard = function (cam, name, world, flipH) {
+  // Three tiers by distance: doubled cell close in, the plain cell at middle
+  // distance, a speck beyond the range where a cell is legible at all.
+  G.SPRITE_NEAR = 190;
+  G.SPRITE_FAR = 1250;
+
+  G.drawBillboard = function (cam, name, world, flipH, speckIdx) {
     var v = G.toView(cam, world);
     if (v.z < 2 || v.z > 3500) { return false; }
     var p = G.project(cam, v);
     var c = R.cells[name];
     if (!c) { return false; }
-    if (p.x < -32 || p.x > R.W + 32 || p.y < -32 || p.y > R.H + 32) { return false; }
-    var ok = R.drawCell(name, p.x - c.w / 2, p.y - c.h, flipH);
+    if (p.x < -64 || p.x > R.W + 64 || p.y < -64 || p.y > R.H + 64) { return false; }
+    var ok;
+    if (v.z < G.SPRITE_NEAR) {
+      ok = R.drawCellScaled(name, p.x - c.w, p.y - c.h * 2, flipH, 2);
+    } else if (v.z < G.SPRITE_FAR) {
+      ok = R.drawCell(name, p.x - c.w / 2, p.y - c.h, flipH);
+    } else {
+      var size = v.z > 2400 ? 1 : 2;
+      ok = R.drawSpeck(p.x, p.y - size, speckIdx || c.data[(c.h - 1) * c.w + (c.w >> 1)] || 1, size);
+    }
     if (ok) { G.stats.sprites++; }
     return ok;
+  };
+
+  // The contact shadow. Every mesh vertex is dropped onto the ground plane and
+  // the convex hull of that footprint is filled once. It is not a real shadow
+  // volume, but it is the aircraft's own shape rather than a rectangle.
+  var hullPts = [];
+
+  // Monotone chain. Lower hull then upper hull, with the upper hull forbidden
+  // from eating into the lower one.
+  function hull2d(points) {
+    points.sort(function (a, b) { return (a.x - b.x) || (a.z - b.z); });
+    var n = points.length, k = 0, out = [], i, floor;
+    if (n < 3) { return points; }
+    for (i = 0; i < n; i++) {
+      while (k >= 2 && cross2(out[k - 2], out[k - 1], points[i]) <= 0) { k--; }
+      out[k++] = points[i];
+    }
+    floor = k + 1;
+    for (i = n - 2; i >= 0; i--) {
+      while (k >= floor && cross2(out[k - 2], out[k - 1], points[i]) <= 0) { k--; }
+      out[k++] = points[i];
+    }
+    out.length = Math.max(0, k - 1);
+    return out;
+  }
+
+  function cross2(o, a, b) {
+    return (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+  }
+
+  G.submitShadow = function (cam, mesh, pos, quat, groundY, opts) {
+    opts = opts || {};
+    hullPts.length = 0;
+    var faces = mesh.faces, step = Math.max(1, Math.floor(faces.length / 24));
+    for (var i = 0; i < faces.length; i += step) {
+      var f = faces[i];
+      for (var j = 0; j < f.v.length; j++) {
+        var lv = f.v[j];
+        var rv = quat ? Q.rotate(quat, { x: lv[0], y: lv[1], z: lv[2] }) : { x: lv[0], y: lv[1], z: lv[2] };
+        hullPts.push({ x: pos.x + rv.x, z: pos.z + rv.z });
+      }
+    }
+    if (hullPts.length < 3) { return; }
+    var h = hull2d(hullPts.slice());
+    if (h.length < 3) { return; }
+    var verts = [];
+    for (var k = 0; k < h.length; k++) {
+      verts.push({ x: h[k].x, y: groundY, z: h[k].z });
+    }
+    G.submitFace(cam, verts, 'shadow', {
+      twoSided: true, noHaze: true, bias: opts.bias || 0.6,
+      light: opts.light, ambient: opts.ambient
+    });
   };
 
 })(typeof window !== 'undefined' ? window : globalThis);

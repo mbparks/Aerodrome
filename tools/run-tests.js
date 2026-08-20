@@ -1,4 +1,4 @@
-// AERODROME :: tools/run-tests.js :: v1.0.0
+// AERODROME :: tools/run-tests.js :: v1.4.1
 // Runs the same assertions as tests.html, without a browser. Development tool
 // only. Nothing in src/ depends on this file, and the simulator never loads it.
 // Usage: node tools/run-tests.js
@@ -11,8 +11,9 @@ var vm = require('vm');
 var srcDir = path.join(__dirname, '..', 'src');
 var files = fs.readdirSync(srcDir).filter(function (f) { return f.slice(-3) === '.js'; }).sort();
 
-// The UI and the main loop need a document. Everything else is pure logic.
-var skip = { '14-ui.js': 1, '15-main.js': 1 };
+// The main loop needs a document at load time. The UI module does not: it
+// only defines functions, and the ones the tests touch are pure.
+var skip = { '15-main.js': 1 };
 
 var store = {};
 var sandbox = {

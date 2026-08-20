@@ -1,4 +1,4 @@
-// AERODROME :: src/12-storage.js :: v1.0.0
+// AERODROME :: src/12-storage.js :: v1.4.0
 // Local first storage. One JSON file in, one JSON file out, schema versioned,
 // validated on import and never evaluated.
 // Depends on 00-core.js, 06-aircraft.js, 11-input.js.
@@ -50,7 +50,10 @@
       bindings: IN ? IN.defaultBindings() : {},
       tuning: {},
       userAircraft: [],
-      logs: []
+      logs: [],
+      // A loaded world file, or null for the valley that ships in the box.
+      // Files written before v1.4 simply do not have this field.
+      world: null
     };
   };
 
@@ -179,6 +182,11 @@
           crashes: num(l.crashes, 0, 10000, 0) | 0
         });
       });
+    }
+    out.world = null;
+    if (input.world && typeof input.world === 'object' && AERO.world) {
+      var wres = AERO.world.validateWorld(input.world);
+      if (wres.ok) { out.world = wres.data; }
     }
     out.build = num(input.build, 0, 1e9, 0) | 0;
     out.savedAt = (typeof input.savedAt === 'string') ? input.savedAt.slice(0, 40) : null;

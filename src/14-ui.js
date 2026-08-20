@@ -1,4 +1,4 @@
-// AERODROME :: src/14-ui.js :: v1.0.0
+// AERODROME :: src/14-ui.js :: v1.4.1
 // The HTML chrome around the viewport. Real elements, keyboard operable, no
 // innerHTML anywhere so imported data can never become markup.
 // Depends on 00-core.js through 13-tests.js.
@@ -28,8 +28,21 @@
 
   function drawer(title, open) {
     var body = el('div', { class: 'drawer-body' });
+    var id = title.toLowerCase().replace(/[^a-z]+/g, '-');
     var d = el('details', { class: 'drawer' }, [el('summary', { text: title }), body]);
-    if (open) { d.setAttribute('open', 'open'); }
+    d.setAttribute('data-drawer', id);
+    var remembered = S.state.settings.openDrawers;
+    var isOpen = remembered ? (remembered.indexOf(id) >= 0) : open;
+    if (isOpen) { d.setAttribute('open', 'open'); }
+    d.addEventListener('toggle', function () {
+      var ids = [];
+      var all = document.querySelectorAll('details[data-drawer]');
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].open) { ids.push(all[i].getAttribute('data-drawer')); }
+      }
+      S.state.settings.openDrawers = ids;
+      S.save();
+    });
     document.getElementById('drawers').appendChild(d);
     return body;
   }
@@ -79,6 +92,126 @@
     return b;
   }
 
+  // ------------------------------------------------------- key legend
+  // The footer used to be a fixed list of keys, half of which did nothing on
+  // the aircraft you were flying. It is built per aircraft now, and it reads
+  // the live bindings, so rebinding a key changes the legend.
+  U.legendFor = function (ac) {
+    if (!ac) { return []; }
+    var out = [];
+    // The footer shows keys, not the full binding description. Pad bindings
+    // live in the Controls drawer where there is room to read them.
+    function keyOf(action) {
+      var b = IN.bindings[action];
+      return (b && b.key) ? IN.keyLabel(b.key) : 'unbound';
+    }
+    function add(action, label, pair) {
+      var keys = keyOf(action);
+      if (pair) {
+        var second = keyOf(pair);
+        if (second !== keys) { keys += ' ' + second; }
+      }
+      out.push({ action: action, actions: pair ? [action, pair] : [action], key: keys, label: label });
+    }
+    // The stick is four keys. If they are still the four arrows, say so.
+    function addStick() {
+      var stickKeys = ['pitchUp', 'pitchDown', 'rollLeft', 'rollRight'].map(function (a) {
+        var b = IN.bindings[a];
+        return b && b.key ? b.key : '';
+      });
+      var allArrows = stickKeys.every(function (k) { return k.indexOf('Arrow') === 0; });
+      out.push({
+        action: 'pitchUp', actions: ['pitchUp', 'pitchDown', 'rollLeft', 'rollRight'],
+        key: allArrows ? 'Arrows' : (keyOf('pitchUp') + ' ' + keyOf('rollLeft')),
+        label: 'stick'
+      });
+    }
+    var hasGear = (ac.contacts || []).some(function (c) { return c.gear; });
+    var hasBrake = (ac.contacts || []).some(function (c) { return c.brake; });
+
+    if (ac.buoyancy && !ac.wing) {
+      add('burner', 'burner');
+      add('vent', 'vent');
+      if (ac.buoyancy.vectored) { add('throttleUp', 'throttle', 'throttleDown'); }
+    } else if (ac.rotor && ac.rotor.powered) {
+      addStick();
+      add('throttleUp', 'collective', 'throttleDown');
+      add('yawLeft', 'pedals', 'yawRight');
+    } else if (ac.reaction) {
+      addStick();
+      add('throttleUp', 'lift', 'throttleDown');
+      add('thrustFwd', 'thrust', 'thrustBack');
+    } else {
+      addStick();
+      if (ac.propulsion) { add('throttleUp', 'throttle', 'throttleDown'); }
+      add('yawLeft', 'rudder', 'yawRight');
+    }
+    if (ac.towable) { add('tow', 'tow'); }
+    if (ac.propulsion || (ac.rotor && ac.rotor.powered)) { add('engineCut', 'engine'); }
+    if (hasGear) { add('gear', 'gear'); }
+    if (ac.wing && ac.wing.flapCl) { add('flaps', 'flaps'); }
+    if (ac.wing && ac.wing.spoilerCd) { add('spoiler', 'airbrake'); }
+    if (hasBrake) { add('brake', 'brake'); }
+    add('camera', 'camera');
+    add('reset', 'reset');
+    add('pause', 'pause');
+    return out;
+  };
+
+  // Capability tags on the roster. Wing and power are on almost everything, so
+  // only the things that make an airframe unusual earn a tag.
+  U.tagsFor = function (ac) {
+    var tags = [];
+    if (ac.buoyancy) { tags.push('BUOYANT'); }
+    if (ac.rotor) { tags.push(ac.rotor.powered ? 'ROTOR' : 'AUTOROTATES'); }
+    if (ac.reaction) { tags.push('REACTION'); }
+    if (ac.flapping) { tags.push('FLAPPING'); }
+    if (ac.towable) { tags.push('NEEDS A TOW'); }
+    if (!tags.length && !ac.propulsion) { tags.push('UNPOWERED'); }
+    return tags;
+  };
+
+  // Tuning is grouped rather than presented as one long undifferentiated
+  // column of sliders.
+  U.TUNE_GROUPS = [
+    { id: 'mass', label: 'Mass and inertia', match: ['massKg', 'inertia.', 'fuelKg'] },
+    { id: 'wing', label: 'Wing', match: ['wing.'] },
+    { id: 'power', label: 'Power', match: ['propulsion.', 'buoyancy.', 'rotor.', 'reaction.', 'flapping.'] },
+    { id: 'control', label: 'Control and stability', match: ['control.'] },
+    { id: 'gear', label: 'Ground and limits', match: ['contacts', 'crashVs', 'hullClear', 'limits.'] },
+    { id: 'view', label: 'Camera defaults', match: ['chase.', 'eye'] }
+  ];
+
+  U.groupFor = function (path) {
+    for (var i = 0; i < U.TUNE_GROUPS.length; i++) {
+      var g = U.TUNE_GROUPS[i];
+      for (var j = 0; j < g.match.length; j++) {
+        if (path.indexOf(g.match[j]) === 0) { return g.id; }
+      }
+    }
+    return 'other';
+  };
+
+  // A single line of orientation on a first launch, dismissed for good once
+  // it has been read. It is not a tour and it does not come back.
+  U.showFirstRun = function () {
+    var gate = document.getElementById('gate');
+    if (!gate) { return; }
+    var box = el('p', { class: 'hint firstrun' });
+    box.appendChild(document.createTextNode('New here? Click the viewport, hold '));
+    box.appendChild(el('kbd', { text: IN.describeBinding('throttleUp') }));
+    box.appendChild(document.createTextNode(' for power, ease back with '));
+    box.appendChild(el('kbd', { text: IN.describeBinding('pitchUp') }));
+    box.appendChild(document.createTextNode(' around 27 m/s, and press '));
+    box.appendChild(el('kbd', { text: IN.describeBinding('camera') }));
+    box.appendChild(document.createTextNode(' to look at yourself from outside. '));
+    box.appendChild(el('button', {
+      type: 'button', class: 'tiny', text: 'Got it',
+      onclick: function () { box.parentNode.removeChild(box); }
+    }));
+    gate.appendChild(box);
+  };
+
   U.setStatus = function (text, kind) {
     var s = document.getElementById('status');
     if (!s) { return; }
@@ -92,21 +225,21 @@
   function buildRoster() {
     var list = document.getElementById('roster');
     while (list.firstChild) { list.removeChild(list.firstChild); }
+    list.setAttribute('role', 'radiogroup');
+    list.setAttribute('aria-label', 'Aircraft');
     AC.list().forEach(function (ac) {
-      var caps = [];
-      if (ac.wing) { caps.push('WING'); }
-      if (ac.propulsion) { caps.push('POWER'); }
-      if (ac.buoyancy) { caps.push('BUOYANCY'); }
-      if (ac.rotor) { caps.push('ROTOR'); }
-      if (ac.reaction) { caps.push('REACTION'); }
-      if (ac.flapping) { caps.push('FLAPPING'); }
-      var capRow = el('span', { class: 'caps' }, caps.map(function (c) {
+      var selected = app.aircraftId === ac.id;
+      var capRow = el('span', { class: 'caps' }, U.tagsFor(ac).map(function (c) {
         return el('span', { class: 'cap', text: c });
       }));
       var b = el('button', {
         type: 'button',
-        'aria-pressed': app.aircraftId === ac.id ? 'true' : 'false',
-        onclick: function () { app.selectAircraft(ac.id); }
+        role: 'radio',
+        'aria-checked': selected ? 'true' : 'false',
+        'aria-pressed': selected ? 'true' : 'false',
+        tabindex: selected ? '0' : '-1',
+        onclick: function () { app.selectAircraft(ac.id); },
+        onkeydown: rosterKey
       }, [
         el('span', { class: 'name', text: ac.name }),
         el('span', { class: 'kind', text: ac.kind }),
@@ -118,11 +251,30 @@
     refs.roster = list;
   }
 
+  // Arrow keys walk the roster, which is what a radio group is supposed to do.
+  function rosterKey(e) {
+    var keys = ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End'];
+    if (keys.indexOf(e.key) < 0) { return; }
+    e.preventDefault();
+    var buttons = refs.roster.querySelectorAll('button[data-ac]');
+    var i = 0;
+    for (var k = 0; k < buttons.length; k++) { if (buttons[k] === e.target) { i = k; } }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { i = (i + 1) % buttons.length; }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { i = (i - 1 + buttons.length) % buttons.length; }
+    else if (e.key === 'Home') { i = 0; }
+    else { i = buttons.length - 1; }
+    buttons[i].focus();
+    app.selectAircraft(buttons[i].getAttribute('data-ac'));
+  }
+
   U.markRoster = function (id) {
     if (!refs.roster) { return; }
     var buttons = refs.roster.querySelectorAll('button[data-ac]');
     for (var i = 0; i < buttons.length; i++) {
-      buttons[i].setAttribute('aria-pressed', buttons[i].getAttribute('data-ac') === id ? 'true' : 'false');
+      var on = buttons[i].getAttribute('data-ac') === id;
+      buttons[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      buttons[i].setAttribute('aria-checked', on ? 'true' : 'false');
+      buttons[i].setAttribute('tabindex', on ? '0' : '-1');
     }
   };
 
@@ -131,12 +283,50 @@
     var q = document.getElementById('quickbar');
     while (q.firstChild) { q.removeChild(q.firstChild); }
     refs.camBtn = button(q, 'Camera: cockpit', function () { app.cycleCamera(); });
+    refs.startBtn = button(q, 'Start on the runway', function () { app.respawn('runway'); });
+    button(q, 'Start airborne', function () { app.respawn('air'); });
+    // Contextual controls. They exist only for the aircraft that has them,
+    // rather than sitting greyed out on everything else.
+    refs.towBtn = button(q, 'Call for tow', function () { app.toggleTow(); });
+    refs.engineBtn = button(q, 'Cut engine', function () { app.toggleEngine(); });
     refs.pauseBtn = button(q, 'Pause', function () { app.togglePause(); }, false);
     refs.muteBtn = button(q, 'Mute', function () { app.toggleMute(); }, S.state.settings.muted);
-    button(q, 'Place on runway', function () { app.respawn('runway'); });
-    button(q, 'Start airborne', function () { app.respawn('air'); });
-    button(q, 'Run self test', function () { U.runTests(); });
+    U.markContextual();
   }
+
+  // Show or hide the aircraft specific buttons and keep their labels honest.
+  U.markContextual = function () {
+    if (!app.state) { return; }
+    var ac = app.state.ac;
+    if (refs.towBtn) {
+      refs.towBtn.hidden = !ac.towable;
+      refs.towBtn.textContent = app.tow.active ? 'Release tow' : 'Call for tow';
+    }
+    if (refs.engineBtn) {
+      var powered = !!(ac.propulsion || (ac.rotor && ac.rotor.powered));
+      refs.engineBtn.hidden = !powered;
+      var stateName = app.state.engineState;
+      refs.engineBtn.textContent = stateName === 'running' ? 'Cut engine'
+        : (stateName === 'starting' ? 'Cranking...' : 'Start engine');
+      refs.engineBtn.disabled = stateName === 'starting';
+    }
+    if (refs.startBtn) {
+      refs.startBtn.hidden = !ac.contacts;
+    }
+  };
+
+  // The key legend under the viewport, rebuilt per aircraft and after any
+  // rebinding, so it never advertises a key that does nothing.
+  U.buildLegend = function () {
+    var host = document.getElementById('legend');
+    if (!host || !app.state) { return; }
+    while (host.firstChild) { host.removeChild(host.firstChild); }
+    U.legendFor(app.state.ac).forEach(function (item) {
+      var span = el('span', {}, [el('kbd', { text: item.key })]);
+      span.appendChild(document.createTextNode(' ' + item.label));
+      host.appendChild(span);
+    });
+  };
 
   U.markCamera = function (mode) {
     if (refs.camBtn) { refs.camBtn.textContent = 'Camera: ' + mode; }
@@ -192,6 +382,14 @@
       slider(b, 'Damping', cs.damping, 0.2, 4, 0.05, function (v) { cs.damping = v; app.persistCamera(); }, function (v) { return v.toFixed(2); }),
       slider(b, 'Bank follow', cs.bankMix, 0, 1, 0.05, function (v) { cs.bankMix = v; app.persistCamera(); }, function (v) { return v.toFixed(2); })
     ];
+    var siteRow = el('div', { class: 'row' });
+    button(siteRow, 'Next tower camera site', function () {
+      var v = AERO.camera.nextView(app.rig);
+      app.setCamera('tower');
+      U.setStatus(v ? ('Camera site ' + v.name) : 'No camera sites in this world');
+    });
+    b.appendChild(siteRow);
+
     var row = el('div', { class: 'row' });
     button(row, 'Use this aircraft defaults', function () {
       AERO.camera.applyAircraftDefaults(app.rig, app.state.ac);
@@ -281,21 +479,54 @@
     if (!refs.tuneHost) { return; }
     while (refs.tuneHost.firstChild) { refs.tuneHost.removeChild(refs.tuneHost.firstChild); }
     var ac = app.state.ac;
+    var stock = AC.stockValues ? AC.stockValues(app.aircraftId) : null;
     refs.tuneHost.appendChild(el('h3', { class: 'placard', text: ac.name }));
-    AC.TUNABLE.forEach(function (t) {
-      var v = AC.getPath(ac, t.path);
-      if (typeof v !== 'number') { return; }
-      slider(refs.tuneHost, t.label, v, t.min, t.max, t.step, function (nv) {
-        AC.setPath(ac, t.path, nv);
-        S.recordTuning(app.aircraftId, t.path, nv);
-        S.save();
-        if (t.path.indexOf('chase.') === 0) {
-          AERO.camera.applyAircraftDefaults(app.rig, ac);
-          U.syncChaseSliders();
-        }
-      }, function (x) { return (Math.abs(x) < 10 ? x.toFixed(3) : x.toFixed(1)); });
+
+    // One section per group, and only the groups this aircraft actually has.
+    U.TUNE_GROUPS.concat([{ id: 'other', label: 'Other', match: [] }]).forEach(function (group) {
+      var rows = AC.TUNABLE.filter(function (t) {
+        return U.groupFor(t.path) === group.id && typeof AC.getPath(ac, t.path) === 'number';
+      });
+      if (!rows.length) { return; }
+      var body = el('div', { class: 'drawer-body' });
+      var section = el('details', { class: 'drawer sub' },
+        [el('summary', { text: group.label }), body]);
+      rows.forEach(function (t) { tuneRow(body, ac, t, stock); });
+      refs.tuneHost.appendChild(section);
     });
   };
+
+  function tuneRow(host, ac, t, stock) {
+    var v = AC.getPath(ac, t.path);
+    var stockV = (stock && typeof stock[t.path] === 'number') ? stock[t.path] : undefined;
+    var mark = el('span', { class: 'mark', text: '' });
+    var fmt = function (x) { return (Math.abs(x) < 10 ? x.toFixed(3) : x.toFixed(1)); };
+    var ctl = slider(host, t.label, v, t.min, t.max, t.step, function (nv) {
+      AC.setPath(ac, t.path, nv);
+      S.recordTuning(app.aircraftId, t.path, nv);
+      S.save();
+      mark.textContent = (stockV !== undefined && Math.abs(nv - stockV) > 1e-9) ? 'changed' : '';
+      if (t.path.indexOf('chase.') === 0) {
+        AERO.camera.applyAircraftDefaults(app.rig, ac);
+        U.syncChaseSliders();
+      }
+    }, fmt);
+    mark.textContent = (stockV !== undefined && Math.abs(v - stockV) > 1e-9) ? 'changed' : '';
+    var row = ctl.input.parentNode;
+    row.appendChild(mark);
+    if (stockV !== undefined) {
+      row.appendChild(el('button', {
+        type: 'button', class: 'tiny', text: 'stock', title: 'Back to ' + fmt(stockV),
+        onclick: function () {
+          AC.setPath(ac, t.path, stockV);
+          ctl.set(stockV);
+          mark.textContent = '';
+          if (S.state.tuning[app.aircraftId]) { delete S.state.tuning[app.aircraftId][t.path]; }
+          S.save();
+        }
+      }));
+    }
+  }
 
   U.buildUserList = function () {
     if (!refs.userList) { return; }
@@ -344,6 +575,7 @@
       S.state.bindings = IN.exportMap();
       S.save();
       U.buildBindingTable();
+      U.buildLegend();
       U.setStatus('Bindings reset');
     });
     b.appendChild(row);
@@ -373,6 +605,7 @@
             S.save();
             cell.textContent = IN.describeBinding(a.id);
             btn.textContent = 'Rebind';
+            U.buildLegend();
           });
         });
         table.appendChild(el('tr', {}, [el('td', { text: a.label }), cell, actions]));
@@ -426,11 +659,56 @@
       U.setStatus('Local data cleared, defaults restored');
     });
     b.appendChild(row2);
+    b.appendChild(el('h3', { class: 'placard', text: 'World' }));
+    refs.worldName = el('p', { class: 'hint', text: '' });
+    b.appendChild(refs.worldName);
+    b.appendChild(el('p', { class: 'hint', text: 'The valley is a data file, not code. Export it, edit it in any text editor, load it back. Unknown structure types are dropped and out of range numbers are clamped rather than trusted.' }));
+    var wrow = el('div', { class: 'row' });
+    button(wrow, 'Export world file', function () {
+      var blob = new Blob([AERO.world.exportWorld()], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = el('a', { href: url, download: 'aerodrome-world.json' });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+      U.setStatus('Exported aerodrome-world.json');
+    });
+    var wfile = el('input', {
+      type: 'file', accept: 'application/json,.json',
+      onchange: function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) { return; }
+        var reader = new FileReader();
+        reader.onload = function () {
+          var parsed;
+          try { parsed = JSON.parse(String(reader.result)); }
+          catch (err) { U.setStatus('That world file is not valid JSON', 'warn'); return; }
+          app.loadWorldFile(parsed);
+        };
+        reader.onerror = function () { U.setStatus('That file could not be read', 'warn'); };
+        reader.readAsText(f);
+        e.target.value = '';
+      }
+    });
+    wrow.appendChild(wfile);
+    b.appendChild(wrow);
+    var wrow2 = el('div', { class: 'row' });
+    button(wrow2, 'Back to the stock valley', function () { app.resetWorldFile(); });
+    b.appendChild(wrow2);
+
     b.appendChild(el('h3', { class: 'placard', text: 'Flight log' }));
     refs.logHost = el('pre', { class: 'log', text: '' });
     b.appendChild(refs.logHost);
     U.buildLog();
   }
+
+  U.markWorld = function () {
+    if (!refs.worldName) { return; }
+    refs.worldName.textContent = 'Loaded world: ' + AERO.world.params.name
+      + ', ' + AERO.world.params.structures.length + ' structures, '
+      + AERO.world.params.views.length + ' camera sites.';
+  };
 
   U.buildLog = function () {
     if (!refs.logHost) { return; }
@@ -508,12 +786,14 @@
     buildRoster();
     buildQuickbar();
     buildView();
-    buildWeather();
     buildTuning();
+    buildWeather();
     buildControls();
     buildData();
     buildDiagnostics();
     buildAbout();
+    U.markWorld();
+    U.buildLegend();
     return U;
   };
 
@@ -521,6 +801,8 @@
     U.markRoster(app.aircraftId);
     U.buildTuneRows();
     U.syncChaseSliders();
+    U.markContextual();
+    U.buildLegend();
   };
 
 })(typeof window !== 'undefined' ? window : globalThis);

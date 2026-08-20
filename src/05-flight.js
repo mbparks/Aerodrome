@@ -1,4 +1,4 @@
-// AERODROME :: src/05-flight.js :: v1.0.0
+// AERODROME :: src/05-flight.js :: v1.4.0
 // One integrator for every aircraft. Capability flags extend it, nothing in
 // this file branches on an aircraft by name.
 // Depends on 00-core.js.
@@ -38,6 +38,9 @@
       fuel: ac.fuelKg || 0,
       gasTempK: ac.buoyancy ? ac.buoyancy.ambientK : 288,
       flapPhase: 0,
+      engineState: 'running',   // running, off, starting
+      startTimer: 0,
+      steerRad: 0,
       onGround: false,
       contactCount: 0,
       crashed: false,
@@ -86,6 +89,18 @@
       qbar = 0.5 * rho * speed * speed;
     }
     var dissipate = env.noDissipation ? 0 : 1;
+    var running = st.engineState === 'running';
+
+    // Height above the surface, used by ground effect and by the gear.
+    var groundY = env.groundHeight ? env.groundHeight(st.pos.x, st.pos.z) : 0;
+    var heightAG = st.pos.y - groundY;
+
+    // Slipstream. A propeller blows over the tail, so pitch and yaw keep
+    // working at a speed where the ailerons have already gone soft.
+    var qSlip = 0;
+    if (ac.propulsion && ac.propulsion.slipQ && running) {
+      qSlip = ac.propulsion.slipQ * (c.throttle || 0);
+    }
 
     var up = Q.rotate(st.quat, { x: 0, y: 1, z: 0 });
     var fwd = Q.rotate(st.quat, { x: 1, y: 0, z: 0 });
@@ -97,7 +112,19 @@
       var w = ac.wing;
       var flapPos = c.flap || 0;
       var cl0 = (w.cl0 || 0) + (w.flapCl || 0) * flapPos;
-      var linear = cl0 + w.clAlpha * alpha;
+      // Ground effect. Inside one wingspan of the surface the induced drag
+      // collapses and the wing gains a little lift. This is what makes a
+      // landing float instead of thump.
+      var geK = 1, geCl = 1;
+      if (w.groundEffect !== false && w.spanM) {
+        var hb = M.clamp(heightAG / w.spanM, 0.02, 3);
+        if (hb < 1) {
+          var phi = 33 * Math.pow(hb, 1.5);
+          geK = phi / (1 + phi);
+          geCl = 1 + 0.09 * (1 - hb);
+        }
+      }
+      var linear = (cl0 + w.clAlpha * alpha) * geCl;
       var stall = w.stallAlpha || M.rad(15);
       var over = (Math.abs(alpha) - stall) / M.rad(6);
       var sigma = M.clamp(over, 0, 1);
@@ -105,7 +132,7 @@
       CL = M.lerp(linear, plate, sigma);
       var cd0 = (w.cd0 || 0.03) + (w.flapCd || 0) * flapPos
         + (w.gearCd || 0) * (c.gear || 0) + (w.spoilerCd || 0) * (c.spoiler || 0);
-      CD = cd0 + (w.k || 0.05) * CL * CL + Math.abs(beta) * (w.cdBeta || 0.4)
+      CD = cd0 + (w.k || 0.05) * geK * CL * CL + Math.abs(beta) * (w.cdBeta || 0.4)
         + sigma * (w.cdStall || 0.5);
 
       var vhat = V.scale(rel, 1 / speed);
@@ -125,9 +152,11 @@
       // Moments. Control authority scales with dynamic pressure, so controls
       // go soft at low speed exactly as they should.
       var auth = M.clamp(qbar / (w.refQ || 400), 0, ac.control.maxAuthMul || 2.2);
+      // Elevator and rudder sit in the slipstream. Ailerons do not.
+      var authTail = M.clamp((qbar + qSlip) / (w.refQ || 400), 0, ac.control.maxAuthMul || 2.2);
       moment.x += -c.roll * ac.control.roll * auth;
-      moment.z += (c.pitch + (c.trim || 0)) * ac.control.pitch * auth;
-      moment.y += c.yaw * ac.control.yaw * auth;
+      moment.z += (c.pitch + (c.trim || 0)) * ac.control.pitch * authTail;
+      moment.y += c.yaw * ac.control.yaw * authTail;
 
       // Static stability and damping. cm0 sets where the airframe wants to sit
       // with the stick centered, cmAlpha is how hard it argues about leaving.
@@ -147,7 +176,7 @@
     // ---------------------------------------------------------------- thrust
     if (ac.propulsion) {
       var pr = ac.propulsion;
-      var thr = c.throttle;
+      var thr = running ? c.throttle : 0;
       if (st.fuel <= 0 && ac.fuelKg) { thr = 0; }
       var fade = 1;
       if (pr.vRef) { fade = M.clamp(1 - Math.pow(Math.max(0, vb.x) / pr.vRef, pr.vExp || 2), pr.minFade || 0.1, 1); }
@@ -155,7 +184,10 @@
       V.addTo(force, fwd, T);
       if (pr.torqueRoll) { moment.x += pr.torqueRoll * thr; }
       if (pr.pFactor) { moment.y += pr.pFactor * thr * M.clamp(alpha / M.rad(10), -1, 1); }
-      st.rpm = M.lerp(st.rpm, pr.idleRPM + (pr.maxRPM - pr.idleRPM) * thr, 0.08);
+      var targetEngineRPM = running
+        ? pr.idleRPM + (pr.maxRPM - pr.idleRPM) * thr
+        : (st.engineState === 'starting' ? pr.idleRPM * 0.45 : 0);
+      st.rpm = M.lerp(st.rpm, targetEngineRPM, 0.08);
     }
 
     // ------------------------------------------------------------- buoyancy
@@ -191,7 +223,7 @@
     // ---------------------------------------------------------------- rotor
     if (ac.rotor) {
       var r = ac.rotor;
-      var powered = r.powered && c.throttle > 0.02 && (st.fuel > 0 || !ac.fuelKg);
+      var powered = r.powered && running && c.throttle > 0.02 && (st.fuel > 0 || !ac.fuelKg);
       var targetRPM;
       if (powered) {
         targetRPM = r.nominalRPM * (0.6 + 0.4 * c.throttle);
@@ -260,9 +292,23 @@
       moment.z += fl.pitchCouple * beat;
     }
 
+    // ------------------------------------------------------- external force
+    // One hook, used by the tow rope. It is a world vector applied at the
+    // centre of gravity, which is close enough for a tow hook on the nose.
+    if (env.extraForce) {
+      force.x += env.extraForce.x;
+      force.y += env.extraForce.y;
+      force.z += env.extraForce.z;
+    }
+
     // ------------------------------------------------------ ground contact
     st.contactCount = 0;
-    var gh = env.groundHeight ? env.groundHeight(st.pos.x, st.pos.z) : 0;
+    var gh = groundY;
+    // Steering angle for any wheel marked steerable. It washes out with speed,
+    // so a nosewheel that turns the aeroplane at walking pace does not try to
+    // steer it off the runway at rotation speed.
+    var groundSpeed = Math.sqrt(st.vel.x * st.vel.x + st.vel.z * st.vel.z);
+    st.steerRad = (c.yaw || 0) * M.clamp(1 - groundSpeed / 22, 0, 1);
     if (ac.contacts) {
       for (var i = 0; i < ac.contacts.length; i++) {
         var cp = ac.contacts[i];
@@ -287,11 +333,30 @@
         if (hs > 0.01) {
           var fh = V.norm({ x: fwd.x, y: 0, z: fwd.z });
           if (V.len2(fh) < 1e-6) { fh = { x: 0, y: 0, z: 1 }; }
+          // A steerable wheel points where the pedals put it, and its rolling
+          // and sliding axes turn with it.
+          if (cp.steer) {
+            // A wheel behind the centre of gravity steers the tail, so its
+            // geometry is reversed. Right pedal still turns right, which is
+            // what a taildragger actually does.
+            var steerSign = (cp.p[0] < 0) ? -1 : 1;
+            var sa = st.steerRad * steerSign * (cp.maxSteerRad || M.rad(26));
+            var cs = Math.cos(sa), sn = Math.sin(sa);
+            fh = { x: fh.x * cs + fh.z * sn, y: 0, z: fh.z * cs - fh.x * sn };
+          }
           var lh = { x: -fh.z, y: 0, z: fh.x };
           var vRoll = horiz.x * fh.x + horiz.z * fh.z;
           var vSide = horiz.x * lh.x + horiz.z * lh.z;
+          // Differential braking. Body z points to the pilot's left, so right
+          // pedal with the brake in loads the right wheel harder.
+          var bias = 1;
+          if (cp.brake && Math.abs(cp.p[2]) > 0.2) {
+            bias = M.clamp(1 + (c.yaw || 0) * (cp.p[2] < 0 ? 0.9 : -0.9), 0, 2);
+          }
+          // Brakes are capped at what a tyre can actually do on dry pavement.
+          // Past that the wheel is locked and asking for more achieves nothing.
           var muRoll = cp.gear
-            ? ((cp.brake ? 0.02 + 0.62 * (c.brake || 0) : 0.02) + (cp.skid || 0))
+            ? Math.min(0.85, (cp.brake ? 0.02 + 0.62 * (c.brake || 0) * bias : 0.02) + (cp.skid || 0))
             : (cp.sideMu || 0.7);
           var muSide = cp.sideMu || (cp.gear ? 0.85 : 0.7);
           var fRoll = Math.min(normalN * muRoll, Math.abs(vRoll) * ac.massKg * 3);
@@ -306,11 +371,35 @@
         if (pointVel.y < -(ac.crashVsMps || 8) && pen > 0.05 && !st.crashed) {
           st.crashed = true; st.crashReason = 'HARD CONTACT';
         }
+        // Gear overload. Arriving level but far too heavily is its own way to
+        // break an aeroplane, and it deserves its own message.
+        var gearLimit = (ac.limits && ac.limits.gearN) || ac.massKg * g * 6;
+        if (cp.gear && normalN > gearLimit && !st.crashed) {
+          st.crashed = true; st.crashReason = 'GEAR OVERLOAD';
+        }
       }
     }
     st.onGround = st.contactCount > 0;
     if (!st.crashed && st.pos.y < gh - (ac.hullClearM || 1.2)) {
-      st.crashed = true; st.crashReason = 'TERRAIN';
+      st.crashed = true;
+      // Digging a wingtip or a propeller in on the ground is not the same
+      // event as flying into a hillside, and should not read the same.
+      st.crashReason = st.contactCount > 0 ? 'NOSE OVER' : 'TERRAIN';
+    }
+    // Overspeed. Past the structural limit the airframe stops being an
+    // airframe. The margin below Vne is deliberately generous.
+    if (!st.crashed && ac.limits && ac.limits.qMax && qbar > ac.limits.qMax) {
+      st.crashed = true; st.crashReason = 'OVERSPEED';
+    }
+    // Rotor strike. The lowest point of a tilted disc is the hub height minus
+    // the radius scaled by how far the disc is off level.
+    if (!st.crashed && ac.rotor && ac.rotor.radiusM) {
+      var hub = V.add(st.pos, Q.rotate(st.quat, { x: 0, y: ac.rotor.hubY || 1.5, z: 0 }));
+      var tilt = Math.sqrt(Math.max(0, 1 - up.y * up.y));
+      var tipY = hub.y - ac.rotor.radiusM * tilt;
+      if (tipY < env.groundHeight(hub.x, hub.z) && st.rotorRPM > 40) {
+        st.crashed = true; st.crashReason = 'ROTOR STRIKE';
+      }
     }
 
     out.force = force;
@@ -355,10 +444,46 @@
     st.omega.z += (m.z - gyro.z) / I.z * dt;
     st.quat = Q.integrate(st.quat, st.omega, dt);
 
-    if (ac.fuelKg && st.fuel > 0 && ac.propulsion) {
+    if (ac.fuelKg && st.fuel > 0 && ac.propulsion && st.engineState === 'running') {
       st.fuel = Math.max(0, st.fuel - ac.propulsion.burnKgPerSec * st.controls.throttle * dt);
     }
+    // Starting is a short procedure, not a switch. It fails quietly if the
+    // tanks are dry, which is the correct behavior and also a good lesson.
+    if (st.engineState === 'starting') {
+      st.startTimer -= dt;
+      if (st.startTimer <= 0) {
+        st.engineState = (ac.fuelKg && st.fuel <= 0) ? 'off' : 'running';
+      }
+    }
     st.time += dt;
+    return st;
+  };
+
+  // A rope pulls and never pushes. Slack rope is zero force, which is the
+  // whole character of an aerotow: it goes quiet, then it snatches.
+  F.ropeForce = function (pos, vel, anchorPos, anchorVel, restLen, k, c, maxN) {
+    var d = V.sub(anchorPos, pos);
+    var len = V.len(d);
+    if (len < 1e-4) { return V.zero(); }
+    var dir = V.scale(d, 1 / len);
+    var stretch = len - restLen;
+    if (stretch <= 0) { return V.zero(); }
+    var closing = V.dot(V.sub(anchorVel, vel), dir);
+    var tension = M.clamp((k || 900) * stretch + (c || 120) * closing, 0, maxN || 9000);
+    return V.scale(dir, tension);
+  };
+
+  // Engine handling. Cutting is immediate, starting takes a moment.
+  F.cutEngine = function (st) {
+    st.engineState = 'off';
+    st.startTimer = 0;
+    return st;
+  };
+
+  F.startEngine = function (st, seconds) {
+    if (st.engineState === 'running') { return st; }
+    st.engineState = 'starting';
+    st.startTimer = (seconds === undefined) ? 2.4 : seconds;
     return st;
   };
 
@@ -391,6 +516,10 @@
     d.mach = speed / 340;
     d.load = st.ac.massKg > 0 ? (V.len(st.accel) / AERO.atmos.G) : 0;
     d.rpm = st.rpm;
+    d.engineState = st.engineState;
+    d.steerRad = st.steerRad;
+    d.groundEffect = st.ac.wing && st.ac.wing.spanM
+      ? M.clamp(1 - d.agl / st.ac.wing.spanM, 0, 1) : 0;
     d.rotorRPM = st.rotorRPM;
     d.fuel = st.fuel;
     d.gasTempK = st.gasTempK;

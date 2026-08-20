@@ -1,4 +1,4 @@
-// AERODROME :: src/11-input.js :: v1.0.0
+// AERODROME :: src/11-input.js :: v1.4.0
 // Keyboard, mouse and Gamepad API. Every action is remappable and the map is
 // saved locally and included in the export.
 // Depends on 00-core.js.
@@ -30,6 +30,7 @@
     { id: 'flaps', label: 'Flaps step', group: 'Ground', event: true, key: 'KeyF' },
     { id: 'spoiler', label: 'Airbrake or spoiler', group: 'Ground', axis: 'spoiler', dir: 1, key: 'KeyH', hold: true },
     { id: 'engineCut', label: 'Engine cut and restart', group: 'Power', event: true, key: 'KeyO' },
+    { id: 'tow', label: 'Call for tow, then release', group: 'Power', event: true, key: 'KeyT' },
     { id: 'camera', label: 'Cycle camera', group: 'View', event: true, key: 'KeyV' },
     { id: 'lookSnap', label: 'Snap view forward', group: 'View', event: true, key: 'KeyN' },
     { id: 'lookUp', label: 'Look up', group: 'View', axis: 'lookY', dir: 1, key: 'KeyI', hold: true },

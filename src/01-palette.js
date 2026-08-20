@@ -1,4 +1,4 @@
-// AERODROME :: src/01-palette.js :: v1.0.0
+// AERODROME :: src/01-palette.js :: v1.2.0
 // 9-bit color, four palettes of sixteen, ordered dither. Depends on 00-core.js.
 // GPL-3.0
 (function (root) {
@@ -87,10 +87,6 @@
     if (P.codes[idx] !== code) { P.codes[idx] = code; P.dirty = true; }
   };
 
-  P.setEntryCode = function (idx, code) {
-    code = code & 511;
-    if (P.codes[idx] !== code) { P.codes[idx] = code; P.dirty = true; }
-  };
 
   P.rebuild = function () {
     for (var i = 0; i < P.TOTAL; i++) {
@@ -118,8 +114,25 @@
     15, 7, 13, 5
   ];
 
-  P.ditherPick = function (idxA, idxB, t, x, y) {
-    var threshold = (P.BAYER[(y & 3) * 4 + (x & 3)] + 0.5) / 16;
+  // A second, longer period pattern. Bayer at 4 x 4 reads as a visible grid
+  // on a soft edge scaled up three times, which is exactly what a cloud is.
+  // This 8 x 8 spreads the same sixty four levels over a larger cell.
+  P.SOFT = [
+    0, 48, 12, 60, 3, 51, 15, 63,
+    32, 16, 44, 28, 35, 19, 47, 31,
+    8, 56, 4, 52, 11, 59, 7, 55,
+    40, 24, 36, 20, 43, 27, 39, 23,
+    2, 50, 14, 62, 1, 49, 13, 61,
+    34, 18, 46, 30, 33, 17, 45, 29,
+    10, 58, 6, 54, 9, 57, 5, 53,
+    42, 26, 38, 22, 41, 25, 37, 21
+  ];
+
+  // pattern is optional. Leave it out for Bayer, pass 'soft' for the 8 x 8.
+  P.ditherPick = function (idxA, idxB, t, x, y, pattern) {
+    var threshold = (pattern === 'soft')
+      ? (P.SOFT[(y & 7) * 8 + (x & 7)] + 0.5) / 64
+      : (P.BAYER[(y & 3) * 4 + (x & 3)] + 0.5) / 16;
     return (t > threshold) ? idxB : idxA;
   };
 
@@ -210,7 +223,6 @@
     return { zen: mix(a.zen, b.zen), hor: mix(a.hor, b.hor), sun: mix(a.sun, b.sun), amb: M.lerp(a.amb, b.amb, t) };
   }
 
-  P.ambientFor = function (hour) { return keyAt(hour).amb; };
 
   P.applyTimeOfDay = function (hour) {
     hour = ((hour % 24) + 24) % 24;

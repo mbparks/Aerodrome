@@ -1,4 +1,4 @@
-// AERODROME :: src/08-weather.js :: v1.0.0
+// AERODROME :: src/08-weather.js :: v1.1.0
 // Mean wind, gusts, turbulence, ridge lift, thermals, and the sky clock.
 // The balloon and the sailplane are unflyable without this file.
 // Depends on 00-core.js, 01-palette.js, 07-world.js.
@@ -21,6 +21,9 @@
     ridgeStrength: 1.0,
     enabled: true
   };
+
+  // Surface roughness length for the boundary layer profile. Open grass.
+  X.ROUGHNESS_M = 0.35;
 
   var gust = { speed: 0, dir: 0, t: 0 };
 
@@ -103,11 +106,21 @@
     var s = X.state;
     if (!s.enabled) { return V.zero(); }
     var w = V.copy(X.env.windMean);
+    var agl = pos.y - W.heightAt(pos.x, pos.z);
+
+    // Surface boundary layer. A log profile referenced to 200 metres, so the
+    // wind on short final is genuinely weaker than the wind that was reported
+    // at altitude. This is what makes a crosswind landing a skill.
+    if (s.gradient !== false) {
+      var z0 = X.ROUGHNESS_M;
+      var prof = Math.log((Math.max(0.4, agl) + z0) / z0) / Math.log((200 + z0) / z0);
+      prof = M.clamp(prof, 0.10, 1.22);
+      w.x *= prof; w.z *= prof;
+    }
     var sp = Math.sqrt(w.x * w.x + w.z * w.z);
 
     // Turbulence. Band limited noise sampled in space and time, stronger in
     // the first few hundred metres and stronger for very light aircraft.
-    var agl = pos.y - W.heightAt(pos.x, pos.z);
     var lowLevel = M.clamp(1 - agl / 420, 0.15, 1);
     var amp = s.turbulence * (0.6 + sp * 0.09) * lowLevel * (gustFactor || 1);
     if (amp > 0.001) {

@@ -1,4 +1,4 @@
-// AERODROME :: src/09-camera.js :: v1.0.0
+// AERODROME :: src/09-camera.js :: v1.4.0
 // Cockpit eye point, trailing spring damper chase, and a tower view.
 // Depends on 00-core.js, 03-render.js, 07-world.js.
 // GPL-3.0
@@ -25,6 +25,9 @@
       fovCockpit: 66,
       fovChase: 58,
       tower: { x: -70, y: 0, z: 120 },
+      viewIndex: 0,
+      viewAim: null,
+      viewFov: 60,
       settings: { dist: 16, up: 4, lag: 3.2, lead: 0.9, damping: 1.35, bankMix: 0.35 }
     };
   };
@@ -104,14 +107,37 @@
       cam.quat = C.lookAt(cam.pos, aim, upHint);
       cam.fovDeg = rig.fovChase;
     } else {
-      // Tower and flyby. Sits on the field, tracks the aircraft, and gives up
-      // gracefully when the aircraft is far away.
-      var t = rig.tower;
-      var ty = W.heightAt(t.x, t.z) + 17;
-      cam.pos = { x: t.x, y: ty, z: t.z };
-      cam.quat = C.lookAt(cam.pos, st.pos, { x: 0, y: 1, z: 0 });
+      // Tower and flyby. The world file lists the fixed camera sites. The
+      // nearest one takes the shot, the aim is smoothed so a fast pass looks
+      // like a camera operator rather than a turret, and the zoom follows
+      // distance so the aircraft stays the same size in frame.
+      var site = C.pickView(rig, st);
+      var sy = W.heightAt(site.x, site.z) + site.height;
+      cam.pos = { x: site.x, y: sy, z: site.z };
+      // Lead the aim slightly, then smooth it. Reduced motion snaps instead.
+      var want = {
+        x: st.pos.x + st.vel.x * 0.22,
+        y: st.pos.y + st.vel.y * 0.18,
+        z: st.pos.z + st.vel.z * 0.22
+      };
+      if (!rig.viewAim || rig.reducedMotion) {
+        rig.viewAim = V.copy(want);
+      } else {
+        var k = M.clamp(dt * 4.5, 0, 1);
+        rig.viewAim = {
+          x: M.lerp(rig.viewAim.x, want.x, k),
+          y: M.lerp(rig.viewAim.y, want.y, k),
+          z: M.lerp(rig.viewAim.z, want.z, k)
+        };
+      }
+      cam.quat = C.lookAt(cam.pos, rig.viewAim, { x: 0, y: 1, z: 0 });
       var d = V.len(V.sub(st.pos, cam.pos));
-      cam.fovDeg = M.clamp(60 - Math.log(Math.max(60, d) / 60) * 14, 12, 60);
+      // Frame the aircraft to a roughly constant size, then damp the zoom so
+      // it does not pump on a close pass.
+      var span = (st.ac.wing && st.ac.wing.spanM) ? st.ac.wing.spanM : 8;
+      var wantFov = M.clamp(M.deg(2 * Math.atan((span * 2.6) / Math.max(12, d))), 9, 62);
+      rig.viewFov = rig.viewFov ? M.lerp(rig.viewFov, wantFov, M.clamp(dt * 2.2, 0, 1)) : wantFov;
+      cam.fovDeg = rig.viewFov;
     }
 
     // Camera shake, damped when the user asks for reduced motion.
@@ -126,6 +152,38 @@
 
     G.updateCamera(cam);
     return cam;
+  };
+
+  // Fixed camera sites come from the world file. The closest one to the
+  // aircraft gets the shot, with hysteresis so it does not flip back and
+  // forth when the aircraft is equidistant between two.
+  C.pickView = function (rig, st) {
+    var views = (W.params && W.params.views && W.params.views.length)
+      ? W.params.views
+      : [{ name: 'TOWER', x: rig.tower.x, z: rig.tower.z, height: 17 }];
+    var best = rig.viewIndex || 0;
+    if (best >= views.length) { best = 0; }
+    var bestD = Infinity;
+    for (var i = 0; i < views.length; i++) {
+      var dx = views[i].x - st.pos.x, dz = views[i].z - st.pos.z;
+      var d = Math.sqrt(dx * dx + dz * dz);
+      // The site already in use keeps a generous head start.
+      if (i === rig.viewIndex) { d *= 0.62; }
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best !== rig.viewIndex) {
+      rig.viewIndex = best;
+      rig.viewAim = null;
+    }
+    return views[best];
+  };
+
+  C.nextView = function (rig) {
+    var views = (W.params && W.params.views) ? W.params.views : [];
+    if (!views.length) { return null; }
+    rig.viewIndex = (rig.viewIndex + 1) % views.length;
+    rig.viewAim = null;
+    return views[rig.viewIndex];
   };
 
   C.cycle = function (rig, allowTower) {

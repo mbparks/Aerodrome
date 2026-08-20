@@ -1,4 +1,4 @@
-// AERODROME :: src/06-aircraft.js :: v1.0.0
+// AERODROME :: src/06-aircraft.js :: v1.4.0
 // Aircraft parameter blocks. Data only. The integrator never reads a name
 // from this file, only capability flags and numbers.
 // Depends on 00-core.js.
@@ -194,17 +194,19 @@
     },
     propulsion: {
       maxThrustN: 2500, vRef: 92, vExp: 2, minFade: 0.1, idleRPM: 700, maxRPM: 2500,
-      burnKgPerSec: 0.0035, torqueRoll: -120, pFactor: 60, rhoExp: 0.7
+      burnKgPerSec: 0.0035, torqueRoll: -120, pFactor: 60, rhoExp: 0.7, slipQ: 300
     },
+    limits: { qMax: 4200, gearN: 63000 },
     control: { pitch: 1250, roll: 1500, yaw: 780, maxAuthMul: 2.4, damp: { x: 900, y: 1500, z: 1500 } },
     contacts: [
       { p: [0.4, -1.1, 1.3], gear: true, brake: true },
       { p: [0.4, -1.1, -1.3], gear: true, brake: true },
-      { p: [-3.4, -0.9, 0], gear: true, brake: true, sideMu: 0.9 }
+      { p: [-3.4, -0.9, 0], gear: true, brake: true, sideMu: 0.9, steer: true }
     ],
     eye: [1.0, 0.55, 0],
     chase: { dist: 16, up: 4.0, lag: 3.2, lead: 0.9 },
-    audio: { patch: 'piston', hzPerRPM: 0.055, base: 22, level: 0.55 },
+    audio: { patch: 'piston', hzPerRPM: 0.055, base: 22, level: 0.55,
+      layer: { patch: 'hum', mul: 2.02, level: 0.22 } },
     entry: { alt: 300, speed: 55, throttle: 0.62, pitch: rad(2), trim: 'aero' },
     mesh: mesh(
       mk.box(-1.2, 0, 0, 2.6, 0.62, 0.55, 'hull'),
@@ -222,6 +224,7 @@
 
   stock.warbird = {
     id: 'warbird',
+    limits: { qMax: 17000, gearN: 210000 },
     name: 'STANCHION P-4',
     kind: 'Warbird',
     blurb: 'Torque roll on the runway, heavy in the turn, loud everywhere.',
@@ -244,11 +247,12 @@
     contacts: [
       { p: [0.9, -1.5, 1.5], gear: true, brake: true },
       { p: [0.9, -1.5, -1.5], gear: true, brake: true },
-      { p: [-5.2, -0.8, 0], gear: true, brake: true, sideMu: 1.1 }
+      { p: [-5.2, -0.8, 0], gear: true, brake: true, sideMu: 1.1, steer: true }
     ],
     eye: [0.2, 1.0, 0],
     chase: { dist: 22, up: 5.0, lag: 2.6, lead: 1.2 },
-    audio: { patch: 'piston', hzPerRPM: 0.038, base: 26, level: 0.75 },
+    audio: { patch: 'piston', hzPerRPM: 0.038, base: 26, level: 0.75,
+      layer: { patch: 'hum', mul: 1.51, level: 0.3 } },
     entry: { alt: 600, speed: 105, throttle: 0.7, pitch: rad(1.5), trim: 'aero' },
     mesh: mesh(
       mk.box(-1.6, 0, 0, 3.4, 0.72, 0.62, 'hull'),
@@ -265,6 +269,7 @@
 
   stock.jet = {
     id: 'jet',
+    limits: { qMax: 58000, gearN: 480000 },
     name: 'PICKET F-9',
     kind: 'Jet interceptor',
     blurb: 'Fast, high wing loading, no manners at all below 120.',
@@ -287,11 +292,12 @@
     contacts: [
       { p: [1.6, -1.7, 1.1], gear: true, brake: true },
       { p: [1.6, -1.7, -1.1], gear: true, brake: true },
-      { p: [-3.6, -1.7, 0], gear: true, brake: true, sideMu: 1.0 }
+      { p: [-3.6, -1.7, 0], gear: true, brake: true, sideMu: 1.0, steer: true }
     ],
     eye: [2.6, 0.85, 0],
     chase: { dist: 30, up: 6.0, lag: 2.2, lead: 1.6 },
-    audio: { patch: 'turbine', hzPerRPM: 0.028, base: 60, level: 0.7 },
+    audio: { patch: 'turbine', hzPerRPM: 0.028, base: 60, level: 0.7,
+      layer: { patch: 'blip', mul: 8.4, level: 0.14 } },
     entry: { alt: 1500, speed: 180, throttle: 0.72, pitch: rad(1.2), trim: 'aero' },
     mesh: mesh(
       mk.box(-1.0, 0, 0, 5.4, 0.8, 0.8, 'hull'),
@@ -307,6 +313,8 @@
 
   stock.sailplane = {
     id: 'sailplane',
+    towable: { restLen: 48, k: 1200, c: 800, maxN: 12000, releaseAltM: 700 },
+    limits: { qMax: 5200, gearN: 26000 },
     name: 'LONG MEADOW',
     kind: 'Sailplane',
     blurb: 'No engine. Ridge on the upwind slope, thermals over the town.',
@@ -403,7 +411,8 @@
     ],
     eye: [10.0, -6.4, 0],
     chase: { dist: 62, up: 14, lag: 5.0, lead: 0.4 },
-    audio: { patch: 'piston', hzPerRPM: 0.03, base: 18, level: 0.4 },
+    audio: { patch: 'piston', hzPerRPM: 0.03, base: 18, level: 0.4,
+      layer: { patch: 'hum', mul: 0.51, level: 0.2 } },
     entry: { alt: 500, speed: 12, throttle: 0.45, pitch: 0, trim: 'buoyant' },
     mesh: mesh(
       mk.lathe([[-16, 0.5], [-12, 4.0], [-4, 6.4], [4, 6.4], [11, 4.6], [16, 0.6]], 10, 'white'),
@@ -456,6 +465,7 @@
     hullClearM: 1.2,
     rotor: {
       powered: true, cyclic: true, nominalRPM: 400, maxThrustN: 20000, tiltRad: 0.30,
+      radiusM: 5.2, hubY: 1.66,
       hubMoment: 3000, torqueYaw: 1400, translationalLift: 0.42, etlSpeed: 12,
       inertiaTau: 3.4, autoDescent: 13, rotorDragArea: 2.6
     },
@@ -469,7 +479,8 @@
     ],
     eye: [1.5, 0.55, 0],
     chase: { dist: 17, up: 4.6, lag: 3.0, lead: 0.9 },
-    audio: { patch: 'rotor', hzPerRPM: 0.09, base: 12, level: 0.6 },
+    audio: { patch: 'rotor', hzPerRPM: 0.09, base: 12, level: 0.6,
+      layer: { patch: 'turbine', mul: 5.6, level: 0.2 } },
     entry: { alt: 200, speed: 0, throttle: 0.8, collective: 0.62, pitch: 0, trim: 'hover' },
     mesh: mesh(
       mk.box(0.2, 0, 0, 2.2, 0.85, 0.85, 'hull'),
@@ -495,13 +506,15 @@
     hullClearM: 0.9,
     rotor: {
       powered: false, cyclic: true, nominalRPM: 340, maxThrustN: 8600, tiltRad: 0.22,
+      radiusM: 4.6, hubY: 1.78,
       hubMoment: 1100, translationalLift: 0.7, etlSpeed: 9, inertiaTau: 4.5,
       autoDescent: 7.5, rotorDragArea: 1.4, fixedCollective: 1.0
     },
     propulsion: {
       maxThrustN: 1500, vRef: 60, vExp: 2, minFade: 0.15, idleRPM: 900, maxRPM: 2900,
-      burnKgPerSec: 0.003, torqueRoll: -60, rhoExp: 0.7
+      burnKgPerSec: 0.003, torqueRoll: -60, rhoExp: 0.7, slipQ: 140
     },
+    limits: { qMax: 2600 },
     wing: {
       areaM2: 2.4, spanM: 2.6, chordM: 0.9, clAlpha: 3.0, cl0: 0, stallAlpha: rad(40),
       cd0: 0.09, k: 0.2, cm0: 0.02, cmAlpha: 0.8, refQ: 260,
@@ -511,11 +524,12 @@
     contacts: [
       { p: [0.8, -1.3, 0.9], gear: true, brake: true },
       { p: [0.8, -1.3, -0.9], gear: true, brake: true },
-      { p: [-1.9, -1.3, 0], gear: true, brake: true, sideMu: 0.9 }
+      { p: [-1.9, -1.3, 0], gear: true, brake: true, sideMu: 0.9, steer: true }
     ],
     eye: [0.6, 0.35, 0],
     chase: { dist: 14, up: 4.0, lag: 3.2, lead: 0.9 },
-    audio: { patch: 'piston', hzPerRPM: 0.05, base: 20, level: 0.5 },
+    audio: { patch: 'piston', hzPerRPM: 0.05, base: 20, level: 0.5,
+      layer: { patch: 'hum', mul: 2.4, level: 0.18 } },
     entry: { alt: 300, speed: 26, throttle: 0.6, pitch: rad(3), trim: 'rotor' },
     mesh: mesh(
       mk.box(0.0, 0, 0, 1.2, 0.45, 0.45, 'hull'),
@@ -550,7 +564,7 @@
     contacts: [
       { p: [0.4, -0.9, 0.5], gear: true, brake: true, sideMu: 1.0 },
       { p: [0.4, -0.9, -0.5], gear: true, brake: true, sideMu: 1.0 },
-      { p: [-2.2, -0.5, 0], gear: true, sideMu: 0.8 }
+      { p: [-2.2, -0.5, 0], gear: true, sideMu: 0.8, steer: true }
     ],
     eye: [0.5, 0.3, 0],
     chase: { dist: 12, up: 3.4, lag: 3.4, lead: 0.8 },
@@ -598,6 +612,7 @@
 
   stock.rocket = {
     id: 'rocket',
+    limits: { qMax: 90000 },
     name: 'PARABOLA X',
     kind: 'Lifting body rocket',
     blurb: 'Ballistic on the way up, dead stick all the way back down.',
@@ -618,11 +633,12 @@
     contacts: [
       { p: [1.4, -1.2, 1.0], gear: true, brake: true },
       { p: [1.4, -1.2, -1.0], gear: true, brake: true },
-      { p: [-3.0, -1.2, 0], gear: true, brake: true, sideMu: 1.0 }
+      { p: [-3.0, -1.2, 0], gear: true, brake: true, sideMu: 1.0, steer: true }
     ],
     eye: [2.2, 0.7, 0],
     chase: { dist: 26, up: 6, lag: 2.4, lead: 1.4 },
-    audio: { patch: 'rocket', hzPerRPM: 0.6, base: 34, level: 0.85 },
+    audio: { patch: 'rocket', hzPerRPM: 0.6, base: 34, level: 0.85,
+      layer: { patch: 'turbine', mul: 0.5, level: 0.3 } },
     entry: { alt: 40, speed: 0, throttle: 1.0, pitch: rad(70), trim: 'ballistic' },
     mesh: mesh(
       mk.lathe([[-3.6, 0.9], [0.0, 1.15], [2.6, 0.9], [3.8, 0.25]], 8, 'white', 0),
@@ -690,7 +706,20 @@
     { path: 'chase.dist', label: 'Chase distance m', min: 1, max: 120, step: 0.5 },
     { path: 'chase.up', label: 'Chase height m', min: 0, max: 40, step: 0.2 },
     { path: 'chase.lag', label: 'Chase spring', min: 0.4, max: 12, step: 0.1 },
-    { path: 'chase.lead', label: 'Chase lead', min: 0, max: 3, step: 0.05 }
+    { path: 'chase.lead', label: 'Chase lead', min: 0, max: 3, step: 0.05 },
+    // Capability specific. Each one is skipped for an aircraft that does not
+    // have that capability, so a balloon shows balloon numbers.
+    { path: 'buoyancy.volumeM3', label: 'Envelope volume m3', min: 50, max: 40000, step: 10 },
+    { path: 'buoyancy.burnerKPerSec', label: 'Burner K per second', min: 0, max: 120, step: 0.5 },
+    { path: 'buoyancy.ventKPerSec', label: 'Vent K per second', min: 0, max: 120, step: 0.5 },
+    { path: 'rotor.maxThrustN', label: 'Rotor thrust N', min: 0, max: 120000, step: 50 },
+    { path: 'rotor.nominalRPM', label: 'Rotor rpm', min: 40, max: 1200, step: 1 },
+    { path: 'rotor.tiltRad', label: 'Cyclic range rad', min: 0.02, max: 0.9, step: 0.005 },
+    { path: 'reaction.upN', label: 'Reaction lift N', min: 0, max: 120000, step: 50 },
+    { path: 'reaction.forwardN', label: 'Reaction thrust N', min: 0, max: 120000, step: 50 },
+    { path: 'flapping.peakN', label: 'Beat force N', min: 0, max: 20000, step: 5 },
+    { path: 'flapping.baseHz', label: 'Beat rate Hz', min: 0.1, max: 12, step: 0.05 },
+    { path: 'crashVsMps', label: 'Survivable arrival m/s', min: 0.5, max: 40, step: 0.1 }
   ];
 
   AC.getPath = function (obj, path) {

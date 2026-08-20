@@ -1,4 +1,4 @@
-// AERODROME :: src/10-instruments.js :: v1.0.0
+// AERODROME :: src/10-instruments.js :: v1.1.0
 // Every instrument is drawn into the framebuffer with the panel palette bank.
 // Depends on 00-core.js, 01-palette.js, 02-raster.js.
 // GPL-3.0
@@ -242,6 +242,8 @@
     opts = opts || {};
     var items = [];
     if (d.stalled) { items.push(['STALL', C.alert]); }
+    if (opts.engineOff) { items.push(['ENG', C.alert]); }
+    if (opts.starting) { items.push(['CRANK', C.needle]); }
     if (opts.gear > 0.5) { items.push(['GEAR', C.mint]); }
     if (opts.flap > 0.02) { items.push(['FLAP', C.needle]); }
     if (opts.brake > 0.02) { items.push(['BRK', C.needle]); }

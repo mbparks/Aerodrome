@@ -1,4 +1,4 @@
-// AERODROME :: src/02-raster.js :: v1.0.0
+// AERODROME :: src/02-raster.js :: v1.2.0
 // Software rasterizer writing palette indices into a fixed framebuffer.
 // Depends on 00-core.js, 01-palette.js.
 // GPL-3.0
@@ -49,14 +49,14 @@
     for (var x = x0; x <= x1; x++) { R.buf[base + x] = idx; }
   };
 
-  R.hlineDither = function (y, x0, x1, idxA, idxB, t) {
+  R.hlineDither = function (y, x0, x1, idxA, idxB, t, pattern) {
     if (y < 0 || y >= R.H) { return; }
     if (x1 < x0) { var s = x0; x0 = x1; x1 = s; }
     if (x0 < 0) { x0 = 0; }
     if (x1 >= R.W) { x1 = R.W - 1; }
     var base = y * R.W;
     for (var x = x0; x <= x1; x++) {
-      R.buf[base + x] = P.ditherPick(idxA, idxB, t, x, y);
+      R.buf[base + x] = P.ditherPick(idxA, idxB, t, x, y, pattern);
     }
   };
 
@@ -210,6 +210,65 @@
         var px = x + xx;
         if (px < 0 || px >= R.W) { continue; }
         R.buf[base + px] = tintShift ? (src + tintShift) : src;
+      }
+    }
+    return true;
+  };
+
+  // A cell drawn at an integer scale. Sprite hardware of this era doubled
+  // cells rather than filtering them, so scale 2 is pixel replication and
+  // nothing else. Still one sprite per scanline against the budget.
+  R.drawCellScaled = function (name, x, y, flipH, scale, tintShift) {
+    scale = Math.max(1, Math.round(scale || 1));
+    if (scale === 1) { return R.drawCell(name, x, y, flipH, tintShift); }
+    var c = R.cells[name];
+    if (!c) { return false; }
+    x = Math.round(x); y = Math.round(y);
+    var w = c.w * scale, h = c.h * scale;
+    if (x + w < 0 || x >= R.W || y + h < 0 || y >= R.H) { return false; }
+    var accepted = true;
+    for (var sy = 0; sy < h; sy++) {
+      var ly = y + sy;
+      if (ly < 0 || ly >= R.H) { continue; }
+      if (R.spriteLoad[ly] >= R.SPRITES_PER_LINE) { accepted = false; break; }
+    }
+    if (!accepted) { R.overflowCount++; return false; }
+    for (var yy = 0; yy < h; yy++) {
+      var py = y + yy;
+      if (py < 0 || py >= R.H) { continue; }
+      R.spriteLoad[py]++;
+      var base = py * R.W;
+      var srcRow = ((yy / scale) | 0) * c.w;
+      for (var xx = 0; xx < w; xx++) {
+        var sx = (xx / scale) | 0;
+        var src = c.data[srcRow + (flipH ? (c.w - 1 - sx) : sx)];
+        if (src === 0) { continue; }
+        var px = x + xx;
+        if (px < 0 || px >= R.W) { continue; }
+        R.buf[base + px] = tintShift ? (src + tintShift) : src;
+      }
+    }
+    return true;
+  };
+
+  // The far tier. Past the distance where a cell is legible, a sprite is a
+  // couple of pixels, which is what the hardware would have done anyway.
+  R.drawSpeck = function (x, y, idx, size) {
+    x = Math.round(x); y = Math.round(y);
+    size = Math.max(1, size | 0);
+    if (y < 0 || y >= R.H) { return false; }
+    if (R.spriteLoad[y] >= R.SPRITES_PER_LINE) { R.overflowCount++; return false; }
+    for (var yy = 0; yy < size; yy++) {
+      var py = y + yy;
+      if (py < 0 || py >= R.H) { continue; }
+      if (yy > 0) {
+        if (R.spriteLoad[py] >= R.SPRITES_PER_LINE) { continue; }
+      }
+      R.spriteLoad[py]++;
+      for (var xx = 0; xx < size; xx++) {
+        var px = x + xx;
+        if (px < 0 || px >= R.W) { continue; }
+        R.buf[py * R.W + px] = idx;
       }
     }
     return true;

@@ -1,4 +1,4 @@
-// AERODROME :: src/00-core.js :: v1.0.0
+// AERODROME :: src/00-core.js :: v1.4.1
 // Namespace, math, quaternions, seeded noise. Loaded first, depends on nothing.
 // GPL-3.0
 (function (root) {
@@ -7,7 +7,7 @@
   var AERO = root.AERO = root.AERO || {};
 
   AERO.NAME = 'AERODROME';
-  AERO.VERSION = '1.0.0';
+  AERO.VERSION = '1.4.1';
   AERO.SCHEMA_VERSION = 1;
   AERO.BUILD = 0; // set by storage on load, displayed next to the version
 
