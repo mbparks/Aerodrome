@@ -1,4 +1,4 @@
-// AERODROME :: src/14-ui.js :: v1.4.1
+// AERODROME :: src/14-ui.js :: v1.5.1
 // The HTML chrome around the viewport. Real elements, keyboard operable, no
 // innerHTML anywhere so imported data can never become markup.
 // Depends on 00-core.js through 13-tests.js.
@@ -92,6 +92,25 @@
     return b;
   }
 
+  // ------------------------------------------------------------- fitting
+  // The framebuffer is scaled by whole numbers or not at all. Given a box to
+  // live in, this returns the largest whole scale that fits, and one if
+  // nothing fits, because a squeezed picture is worse than a cropped one.
+  U.fitScale = function (boxW, boxH, fbW, fbH) {
+    if (!(boxW > 0) || !(boxH > 0) || !(fbW > 0) || !(fbH > 0)) { return 1; }
+    var s = Math.floor(Math.min(boxW / fbW, boxH / fbH));
+    return Math.max(1, s);
+  };
+
+  // Fill mode. The backing store still moves in whole steps; this is only the
+  // size of the final blit, and it keeps the aspect ratio to within a pixel.
+  U.fillSize = function (boxW, boxH, fbW, fbH) {
+    if (!(boxW > 0) || !(boxH > 0) || !(fbW > 0) || !(fbH > 0)) { return { w: fbW, h: fbH }; }
+    var k = Math.min(boxW / fbW, boxH / fbH);
+    if (k < 1) { k = 1; }
+    return { w: Math.floor(fbW * k), h: Math.floor(fbH * k) };
+  };
+
   // ------------------------------------------------------- key legend
   // The footer used to be a fixed list of keys, half of which did nothing on
   // the aircraft you were flying. It is built per aircraft now, and it reads
@@ -153,6 +172,7 @@
     if (ac.wing && ac.wing.spoilerCd) { add('spoiler', 'airbrake'); }
     if (hasBrake) { add('brake', 'brake'); }
     add('camera', 'camera');
+    add('fullscreen', 'fullscreen');
     add('reset', 'reset');
     add('pause', 'pause');
     return out;
@@ -198,6 +218,7 @@
     var gate = document.getElementById('gate');
     if (!gate) { return; }
     var box = el('p', { class: 'hint firstrun' });
+    box.setAttribute('id', 'firstRun');
     box.appendChild(document.createTextNode('New here? Click the viewport, hold '));
     box.appendChild(el('kbd', { text: IN.describeBinding('throttleUp') }));
     box.appendChild(document.createTextNode(' for power, ease back with '));
@@ -290,6 +311,8 @@
     refs.towBtn = button(q, 'Call for tow', function () { app.toggleTow(); });
     refs.engineBtn = button(q, 'Cut engine', function () { app.toggleEngine(); });
     refs.pauseBtn = button(q, 'Pause', function () { app.togglePause(); }, false);
+    refs.fsBtn = button(q, 'Fullscreen', function () { app.toggleFullscreen(); });
+    refs.fsBtn.className = 'wide';
     refs.muteBtn = button(q, 'Mute', function () { app.toggleMute(); }, S.state.settings.muted);
     U.markContextual();
   }
@@ -331,6 +354,10 @@
   U.markCamera = function (mode) {
     if (refs.camBtn) { refs.camBtn.textContent = 'Camera: ' + mode; }
   };
+  U.markFullscreen = function (on) {
+    if (refs.fsBtn) { refs.fsBtn.textContent = on ? 'Leave fullscreen' : 'Fullscreen'; }
+  };
+
   U.markPause = function (p) {
     if (refs.pauseBtn) {
       refs.pauseBtn.setAttribute('aria-pressed', p ? 'true' : 'false');
@@ -358,6 +385,10 @@
       { value: '224', label: '320 x 224' },
       { value: '240', label: '320 x 240' }
     ], String(s.resolution), function (v) { app.setResolution(parseInt(v, 10)); });
+    picker(b, 'Picture scaling', [
+      { value: 'whole', label: 'Whole pixels only' },
+      { value: 'fill', label: 'Fill the space' }
+    ], S.state.settings.scaleMode || 'whole', function (v) { app.setScaleMode(v); });
     picker(b, 'Chrome theme', [
       { value: 'night', label: 'Night' },
       { value: 'day', label: 'Day' },

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- AERODROME :: index.html :: v1.4.1 -->
+<!-- AERODROME :: index.html :: v1.5.1 -->
 <html lang="en" data-theme="night">
 <head>
 <meta charset="utf-8">
@@ -7,7 +7,7 @@
 <title>AERODROME</title>
 <meta name="description" content="A browser flight simulator rendered as if it were running on a Sega Genesis.">
 <style>
-/* AERODROME :: chrome styles :: v1.4.1
+/* AERODROME :: chrome styles :: v1.5.1
    UI chrome is exempt from the 64 color constraint. Everything inside the
    canvas is not. */
 :root {
@@ -39,9 +39,16 @@ body {
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.45;
-  min-height: 100vh;
+  margin: 0;
+}
+/* The flight deck is exactly one viewport tall and never scrolls. Settings
+   live below it, and you go looking for those on purpose. */
+#deck {
+  height: 100vh;
+  height: 100dvh;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 h1, h2, h3, .placard {
   font-family: var(--display);
@@ -62,30 +69,37 @@ a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible
 .skip:focus { left: 8px; top: 8px; }
 
 header.bar {
-  display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline;
-  padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--deck);
+  display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline;
+  padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--deck);
 }
-header.bar h1 { font-size: 26px; letter-spacing: 0.3em; }
+header.bar h1 { font-size: 21px; letter-spacing: 0.3em; }
 .stamp { color: var(--muted); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
-#status { margin: 0; color: var(--sig); font-size: 12px; min-height: 18px; }
+#status {
+  margin: 0 0 0 12px; color: var(--sig); font-size: 12px;
+  align-self: center; flex: 1 1 200px; min-width: 0;
+}
 #status[data-kind="warn"] { color: var(--flag); }
 
 main.layout {
   display: grid;
-  grid-template-columns: 218px minmax(0, 1fr);
-  gap: 14px;
-  padding: 14px;
-  align-items: start;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  min-height: 0;
+  align-items: stretch;
 }
 @media (max-width: 900px) {
-  main.layout { grid-template-columns: minmax(0, 1fr); }
-  #rail { max-height: none; }
+  main.layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   #roster { display: flex; overflow-x: auto; gap: 8px; padding-bottom: 6px; }
   #roster .tag { min-width: 170px; }
+  #rail { max-height: 132px; }
 }
 
 /* The flight line rail. Each tag is a stencilled placard for one airframe. */
-#rail { border: 1px solid var(--line); background: var(--deck); padding: 10px; }
+#rail {
+  border: 1px solid var(--line); background: var(--deck); padding: 10px;
+  min-height: 0; overflow-y: auto;
+}
 #rail > .placard { font-size: 15px; color: var(--muted); margin-bottom: 8px; }
 #roster { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .tag button {
@@ -101,14 +115,23 @@ main.layout {
 .cap { border: 1px solid var(--line); color: var(--muted); font-size: 9px; padding: 1px 4px; letter-spacing: 0.1em; }
 
 #gate {
-  background: var(--gate); border: 1px solid var(--line); padding: 10px;
-  display: grid; gap: 10px;
+  background: var(--gate); border: 1px solid var(--line); padding: 8px;
+  display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 8px;
+  min-height: 0;
+}
+/* The stage holds nothing but the framebuffer, which is what goes fullscreen.
+   The canvas is sized in whole pixels by the application, so it is never
+   scaled by a fraction. */
+#stage {
+  min-height: 0; display: grid; place-items: center; background: #000; overflow: hidden;
 }
 #screen {
-  width: 100%; display: block; background: #000; image-rendering: pixelated;
-  image-rendering: crisp-edges; aspect-ratio: 320 / 224; touch-action: none;
+  display: block; background: #000;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+  touch-action: none;
 }
-#screen.tall { aspect-ratio: 320 / 240; }
+#stage:fullscreen { background: #000; width: 100vw; height: 100vh; }
+#stage:-webkit-full-screen { background: #000; width: 100vw; height: 100vh; }
 .quickbar { display: flex; flex-wrap: wrap; gap: 6px; }
 .quickbar button, .row button, .row select, .row input[type="file"] {
   min-height: 44px; background: var(--deck2); color: var(--paper); border: 1px solid var(--line);
@@ -116,6 +139,7 @@ main.layout {
 }
 .quickbar button[aria-pressed="true"] { border-color: var(--lamp); color: var(--lamp); }
 .quickbar button[hidden] { display: none; }
+.quickbar button.wide { margin-left: auto; }
 .quickbar button:disabled { opacity: 0.55; cursor: default; }
 button.tiny {
   min-height: 28px; padding: 2px 8px; font-size: 11px; background: var(--deck2);
@@ -125,7 +149,8 @@ button.tiny:hover { color: var(--lamp); border-color: var(--lamp); }
 .mark { color: var(--lamp); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; min-width: 54px; }
 p.firstrun {
   border: 1px solid var(--line); border-left: 3px solid var(--lamp);
-  padding: 8px 10px; margin: 0; color: var(--paper); background: var(--deck);
+  padding: 6px 10px; margin: 0; color: var(--paper); background: var(--deck);
+  font-size: 12px;
 }
 details.drawer.sub { border-left: 3px solid var(--line); margin: 6px 0; background: var(--deck2); }
 details.drawer.sub > summary { font-size: 13px; letter-spacing: 0.14em; min-height: 38px; }
@@ -160,8 +185,8 @@ pre.log {
 .pass { color: var(--sig); }
 .fail { color: var(--flag); }
 footer.bar {
-  border-top: 1px solid var(--line); padding: 10px 14px; color: var(--muted); font-size: 11px;
-  display: flex; flex-wrap: wrap; gap: 14px;
+  border-top: 1px solid var(--line); padding: 5px 14px; color: var(--muted); font-size: 11px;
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
 }
 kbd {
   border: 1px solid var(--line); padding: 0 4px; background: var(--deck2); color: var(--paper);
@@ -183,9 +208,10 @@ kbd {
 <body>
 <a class="skip" href="#screen">Skip to the aircraft</a>
 
+<div id="deck">
 <header class="bar">
   <h1>Aerodrome</h1>
-  <span class="stamp" id="versionStamp">v1.4.1</span>
+  <span class="stamp" id="versionStamp">v1.5.1</span>
   <span class="stamp">320 x 224 &middot; 64 colors &middot; GPL-3.0</span>
 </header>
 
@@ -196,16 +222,20 @@ kbd {
   </aside>
 
   <section id="gate" aria-label="Viewport">
-    <canvas id="screen" width="960" height="672" tabindex="0"
-            aria-label="Flight viewport. Use the flight controls listed in the controls drawer."></canvas>
-    <div class="quickbar" id="quickbar"></div>
-    <p id="status" role="status" aria-live="polite"></p>
+    <div id="stage">
+      <canvas id="screen" width="960" height="672" tabindex="0"
+              aria-label="Flight viewport. Use the flight controls listed in the controls drawer."></canvas>
+    </div>
+    <div class="quickbar" id="quickbar">
+      <p id="status" role="status" aria-live="polite"></p>
+    </div>
   </section>
 </main>
 
-<section id="drawers" aria-label="Settings"></section>
-
 <footer class="bar" id="legend" aria-label="Keys for the selected aircraft"></footer>
+</div>
+
+<section id="drawers" aria-label="Settings"></section>
 
 <!-- Load order matters. These are classic script tags on purpose: ES modules
      do not load from file://, so the project uses one global namespace. -->

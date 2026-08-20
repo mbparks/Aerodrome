@@ -1,4 +1,4 @@
-// AERODROME :: src/01-palette.js :: v1.2.0
+// AERODROME :: src/01-palette.js :: v1.4.2
 // 9-bit color, four palettes of sixteen, ordered dither. Depends on 00-core.js.
 // GPL-3.0
 (function (root) {
@@ -62,6 +62,18 @@
   P.quant = function (r, g, b) {
     var q = function (v) { return M.clamp(Math.round(M.clamp(v, 0, 255) / 255 * 7), 0, 7); };
     return (q(r) << 6) | (q(g) << 3) | q(b);
+  };
+
+  // The three nine bit levels of a color, and the reverse. Working in levels
+  // keeps hue intact when the whole palette is dimmed.
+  P.levels = function (r, g, b) {
+    var q = function (v) { return M.clamp(Math.round(M.clamp(v, 0, 255) / 255 * 7), 0, 7); };
+    return [q(r), q(g), q(b)];
+  };
+
+  P.setLevels = function (idx, lr, lg, lb) {
+    var c = function (v) { return M.clamp(Math.round(v), 0, 7); };
+    P.setEntry(idx, c(lr) * 255 / 7, c(lg) * 255 / 7, c(lb) * 255 / 7);
   };
 
   P.expand = function (code) {
@@ -202,15 +214,19 @@
   // ------------------------------------------------------- time of day sky
   // Rewrites the sky ramp, sun accents and star entry for a given hour. The
   // result is quantized like everything else, so dusk still lives in 9 bits.
+  // Zenith to horizon, deliberately wide. Nine bit color gives eight levels a
+  // channel, so a narrow gradient collapses into three or four repeated
+  // entries and the sky reads as banded mush. A wide one keeps seven or eight
+  // distinct steps, which is what the ramp is for.
   var KEYS = [
-    { h: 0, zen: [4, 6, 18], hor: [10, 14, 30], sun: [40, 40, 60], amb: 0.18 },
-    { h: 5, zen: [16, 22, 54], hor: [96, 70, 84], sun: [180, 110, 90], amb: 0.30 },
-    { h: 7, zen: [46, 92, 158], hor: [188, 176, 176], sun: [252, 216, 150], amb: 0.62 },
-    { h: 12, zen: [34, 84, 168], hor: [176, 206, 232], sun: [255, 250, 226], amb: 1.0 },
-    { h: 17, zen: [40, 82, 150], hor: [206, 178, 150], sun: [252, 220, 160], amb: 0.72 },
-    { h: 19, zen: [26, 40, 96], hor: [226, 128, 74], sun: [244, 130, 70], amb: 0.36 },
-    { h: 21, zen: [10, 14, 40], hor: [58, 44, 68], sun: [110, 70, 80], amb: 0.20 },
-    { h: 24, zen: [4, 6, 18], hor: [10, 14, 30], sun: [40, 40, 60], amb: 0.18 }
+    { h: 0, zen: [2, 4, 16], hor: [22, 28, 56], sun: [40, 40, 60], amb: 0.18 },
+    { h: 5, zen: [10, 26, 74], hor: [214, 120, 110], sun: [180, 110, 90], amb: 0.30 },
+    { h: 7, zen: [20, 64, 158], hor: [200, 226, 250], sun: [252, 216, 150], amb: 0.62 },
+    { h: 12, zen: [16, 52, 150], hor: [206, 236, 255], sun: [255, 250, 226], amb: 1.0 },
+    { h: 17, zen: [22, 64, 150], hor: [230, 196, 160], sun: [252, 220, 160], amb: 0.72 },
+    { h: 19, zen: [12, 26, 86], hor: [250, 140, 70], sun: [244, 130, 70], amb: 0.36 },
+    { h: 21, zen: [6, 10, 34], hor: [60, 40, 70], sun: [110, 70, 80], amb: 0.20 },
+    { h: 24, zen: [2, 4, 16], hor: [22, 28, 56], sun: [40, 40, 60], amb: 0.18 }
   ];
 
   function keyAt(hour) {
@@ -246,6 +262,38 @@
       var st = j / (s.len - 1);
       P.setEntry(s.start + j, k.sun[0] * M.lerp(0.6, 1, st), k.sun[1] * M.lerp(0.6, 1, st), k.sun[2] * M.lerp(0.6, 1, st));
     }
+    // The world bank follows the light too. A Genesis game changed palettes
+    // for a night level, and without this the grass goes dark while the river
+    // stays a bright noon blue, which is the single most artificial thing a
+    // dusk scene can do.
+    // Relighting happens in level space, not in eight bit space. Scaling
+    // (140,130,112) by 0.96 and requantizing pushed green across a bucket
+    // boundary and turned the ridge pink. Scaling the three levels together
+    // cannot do that, and it is exact at full daylight.
+    // Darkening is a shift down the levels, not a multiply. Multiplying and
+    // rounding collapses the difference between two channels and turns a mid
+    // green into olive. Subtracting the same amount from each keeps the
+    // differences, which is what hue is. Blue is shifted least, so night is
+    // blue rather than merely dark.
+    function relight(bank, offset, depth) {
+      var shift = (1 - M.clamp(k.amb, 0, 1)) * depth;
+      for (var e = 1; e < bank.length; e++) {
+        var base = bank[e];
+        if (!base) { continue; }
+        var bl = P.levels(base[0], base[1], base[2]);
+        // Nothing that was lit at noon is allowed to collapse into the
+        // backdrop color at night. Detail lost that way never comes back.
+        P.setLevels(offset + e,
+          Math.max(Math.min(bl[0], 1), bl[0] - shift),
+          Math.max(Math.min(bl[1], 1), bl[1] - shift * 0.92),
+          Math.max(Math.min(bl[2], 1), bl[2] - shift * 0.60));
+      }
+    }
+    // The ground takes the light hard, the aircraft only half as hard, since
+    // it is the thing you are looking at and it has to stay readable against
+    // a dark valley.
+    relight(STOCK.world, 0, 1.9);
+    relight(STOCK.craft, P.BANK.CRAFT * 16, 1.2);
     var night = M.clamp(1 - k.amb * 1.4, 0, 1);
     P.setEntry(P.RAMP.star.start, 236 * night, 236 * night, 244 * night);
     if (P.dirty) { P.rebuild(); }

@@ -1,4 +1,4 @@
-// AERODROME :: src/07-world.js :: v1.4.0
+// AERODROME :: src/07-world.js :: v1.4.2
 // One valley, one airfield, one river, one town. Hand authored on purpose.
 // Depends on 00-core.js, 03-render.js, 06-aircraft.js.
 // GPL-3.0
@@ -547,7 +547,7 @@
             G.submitFace(cam, [
               { x: gx, y: wl, z: gz }, { x: gx, y: wl, z: gz + t },
               { x: gx + t, y: wl, z: gz + t }, { x: gx + t, y: wl, z: gz }
-            ], 'water', { light: light, ambient: amb + 0.15 });
+            ], 'water', { light: light, ambient: amb * 0.9 + 0.08 });
             continue;
           }
           G.submitFace(cam, [
@@ -646,10 +646,12 @@
     var count = 0;
     for (i = start; i >= 0 && i < list.length && count < 260; i += order) {
       var s = list[i];
-      var dx = s.x - cam.pos.x, dz = s.z - cam.pos.z;
-      if (dx * dx + dz * dz > 1500 * 1500) { continue; }
+      var dx = s.x - cam.pos.x, dy = s.y - cam.pos.y, dz = s.z - cam.pos.z;
+      if (dx * dx + dy * dy + dz * dz > 1500 * 1500) { continue; }
       count++;
-      G.drawBillboard(cam, s.cell, { x: s.x, y: s.y + 6, z: s.z }, s.flip);
+      // Anchored on the ground. The old anchor sat six metres up, which put
+      // every tree in the valley on a six metre invisible stalk.
+      G.drawBillboard(cam, s.cell, { x: s.x, y: s.y, z: s.z }, s.flip);
     }
     for (i = 0; i < W.birds.length; i++) {
       var b = W.birds[i];

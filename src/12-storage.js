@@ -1,4 +1,4 @@
-// AERODROME :: src/12-storage.js :: v1.4.0
+// AERODROME :: src/12-storage.js :: v1.5.1
 // Local first storage. One JSON file in, one JSON file out, schema versioned,
 // validated on import and never evaluated.
 // Depends on 00-core.js, 06-aircraft.js, 11-input.js.
@@ -29,6 +29,7 @@
       savedAt: null,
       settings: {
         resolution: 224,
+        scaleMode: 'whole',
         theme: 'night',
         aircraft: 'trainer',
         cameraMode: 'cockpit',
@@ -84,6 +85,7 @@
     var s = input.settings || {};
     var d = out.settings;
     d.resolution = (s.resolution === 240) ? 240 : 224;
+    d.scaleMode = (s.scaleMode === 'fill') ? 'fill' : 'whole';
     d.theme = str(s.theme, ['night', 'day', 'contrast'], 'night');
     d.aircraft = str(s.aircraft, AC ? AC.ORDER.concat((input.userAircraft || []).map(function (u) { return u && u.id; })) : null, 'trainer');
     d.cameraMode = str(s.cameraMode, ['cockpit', 'chase', 'tower'], 'cockpit');

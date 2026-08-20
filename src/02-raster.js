@@ -1,4 +1,4 @@
-// AERODROME :: src/02-raster.js :: v1.2.0
+// AERODROME :: src/02-raster.js :: v1.4.2
 // Software rasterizer writing palette indices into a fixed framebuffer.
 // Depends on 00-core.js, 01-palette.js.
 // GPL-3.0
@@ -117,7 +117,7 @@
   // caller's problem, exactly as it was on the hardware.
   var xs = new Float32Array(16);
 
-  R.fillPoly = function (pts, idx, ditherB, ditherT) {
+  R.fillPoly = function (pts, idx, ditherB, ditherT, pattern) {
     var n = pts.length;
     if (n < 3) { return; }
     var ymin = 1e9, ymax = -1e9, i;
@@ -150,7 +150,7 @@
       if (ditherB === undefined || ditherB === null) {
         R.hline(y, px0, px1, idx);
       } else {
-        R.hlineDither(y, px0, px1, idx, ditherB, ditherT);
+        R.hlineDither(y, px0, px1, idx, ditherB, ditherT, pattern);
       }
     }
   };

@@ -1,18 +1,27 @@
 # AERODROME roadmap
 
-<!-- AERODROME :: docs/ROADMAP.md :: v1.4.1 -->
+<!-- AERODROME :: docs/ROADMAP.md :: v1.5.1 -->
 
-Nothing below is committed work. It is the ordered list of what the v1.0 build
-deferred, what the known limitations imply, and what would make the thing
-better without breaking the rules it was built under.
+Revised after v1.5.0. Everything planned moved up one number, because a
+fullscreen cockpit and a deck that fits the window turned out to matter more
+than any of it and took the v1.5 slot.
+
+Revised after v1.4.1. The ordering below is the current one, not the original:
+input and touch moved to the front, replay moved back once it turned out to
+need groundwork first, and the world editor moved to last now that a world is
+a text file anybody can edit without one.
+
+Nothing below is committed work.
 
 ## The rules that do not change
 
-These are the constraints every milestone below has to live inside. If a
-feature cannot be built without breaking one of them, the feature loses.
+Every milestone has to live inside these. If a feature cannot be built without
+breaking one, the feature loses.
 
 * Runs by double clicking `index.html` from `file://`. No install, no build
-  step, no bundler, no CDN, no network call at runtime.
+  step, no bundler, no CDN, no network call at runtime. The one exception is
+  the FM worklet, which is fetched only when the page is served over http and
+  which the simulator runs without.
 * Classic script tags, one `AERO` namespace, no `import` or `export`, no Web
   Workers.
 * The Genesis budget holds: 320 by 224, 64 colors on screen from 512, flat
@@ -22,174 +31,254 @@ feature cannot be built without breaking one of them, the feature loses.
   schema version.
 * Every milestone lands with its assertions, and the suite stays green.
 
-## v1.0.1 - Review pass
+# Ahead
 
-The one milestone that is definitely happening, because it is your first hours
-in the seat. Whatever the build got wrong about *feel* goes here.
+## v1.0.1 - Review pass (open)
 
-* Fix whatever the hands on review turns up.
-* Correct the About panel feedback URL once the repository path is real.
-* Re-check the takeoff and landing envelope for each of the twelve after any
-  tuning changes, since trim assertions catch divergence but not unpleasantness.
+Still open, because the hands on review has not happened yet. Whatever the
+first real hours in the seat say about feel goes here, plus the About panel
+feedback URL once the repository path is real.
 
-## v1.1 - Airmanship - SHIPPED
+## v1.6 - Trim
 
-Flight model and ground handling. All of it landed, with fifteen new
-assertions, and the suite went from 41 to 56.
+Input. It is the layer everything else is played through and the one that has
+had the least attention. Small, and overdue.
 
-* Ground effect. Induced drag collapses inside one wingspan of the surface and
-  has faded entirely a wingspan and a half up.
-* Slipstream over the tail. Elevator and rudder sit in the propeller wash and
-  keep working at a speed where the ailerons have gone soft. Ailerons do not
-  get the benefit, because they are not in the wash.
-* Steerable wheels with speed washout, and differential braking off the pedals.
-  A wheel behind the centre of gravity gets its geometry reversed so that right
-  pedal still turns right, which is what a taildragger actually does.
-* Brake friction capped at 0.85, which is roughly a tyre on dry pavement.
-* Surface wind gradient on a log profile referenced to 200 metres.
-* Crash taxonomy: hard contact, gear overload, overspeed, rotor strike, nose
-  over and terrain, each reported as itself.
-* Engine as a state machine in the flight model: running, off, starting. The
-  starter cranks for 2.4 seconds and refuses on a dry tank.
+* Gamepad rebinding that actually listens for the gamepad. The capture in the
+  Controls drawer is keyboard only today, so the sensible default pad map is
+  the only pad map anyone can have.
+* Per axis dead zone, so a worn stick does not fly the aeroplane on its own.
+* Per axis response curve, because a linear stick on a warbird is unflyable
+  and a curved one is fine.
+* Per axis inversion, saved with everything else.
+* Multiple pads and hot plug: notice them, list them, let the person pick.
+* Conflict detection when two actions land on the same key, shown in the
+  Controls drawer rather than discovered in the air.
+* Assertions: a captured pad binding round trips through the save file; dead
+  zone maps rest to exactly zero and full deflection to exactly one; the
+  response curve is monotone and passes through both ends unchanged; a
+  duplicate binding is reported.
 
-Found along the way: rear-mounted steering wheels need reversed geometry, and
-uncapped brake friction will flip a taildragger onto its nose at taxi speed.
+## v1.7 - Fingertips
 
-## v1.2 - Optics - SHIPPED
+Touch. The chrome is already sized for it, the aircraft is not, and a browser
+flight simulator that cannot be flown on a phone is missing most of the people
+who could open it.
 
-Renderer quality, all of it inside the palette budget. Fourteen new
-assertions, suite now at 70.
+* An on screen stick and throttle, drawn as chrome rather than inside the
+  framebuffer, so they cost no polygons and break no palette rule.
+* Both feed `IN.axes` like every other input. Nothing downstream learns that
+  touch exists, which keeps remapping and, later, replay honest.
+* Contextual touch buttons driven by the same `legendFor` logic the key legend
+  uses, so a balloon gets a burner and a vent and a jet does not.
+* Portrait and landscape layouts, and a control layer that appears under a
+  coarse pointer without stealing the screen from a mouse.
+* Assertions: a touch vector maps into the same axis range as a key or a pad;
+  the layer appears only under a coarse pointer or an explicit override; the
+  buttons offered match the legend for that aircraft.
 
-* Sutherland Hodgman clipping against the screen rectangle, replacing the old
-  coordinate clamp. Two thirds of the fill work in a typical view was being
-  spent on polygons that were entirely off screen.
-* Painter order now keys on 0.6 of the nearest vertex depth plus 0.4 of the
-  centroid, with an explicit bias for coplanar work like runway markings.
-* Large static faces are split at build time, and the split mesh is used
-  inside 700 metres where the sorting errors are actually visible.
-* The contact shadow is the convex hull of the aircraft's own footprint
-  dropped onto the ground, so it turns as the aircraft turns.
-* Three sprite tiers: a doubled cell close in, the plain cell at middle
-  distance, a speck beyond legibility. Doubling is pixel replication, which is
-  what the hardware did.
-* An 8 x 8 ordered pattern for soft edges, used on the clouds, since Bayer at
-  4 x 4 reads as a visible grid when the framebuffer is scaled up three times.
+## v1.8 - Frontal
 
-A full BSP was on the table and turned out not to be needed. Build time
-subdivision plus a better sort key covers the cases that actually popped, at a
-fraction of the complexity.
+Weather with a shape to it. Today the wind is a mean vector plus gusts plus
+terrain effects, which is good, and it never changes its mind, which is not.
 
-Measured after the change, over the town at 320 by 224: about 2,080 faces
-submitted, 96 drawn, 424 rejected by the screen clipper.
+* Fronts crossing the valley: a wind shift and a speed change arriving over
+  minutes, so the landing you planned twenty minutes ago is the wrong landing.
+* Shear layers with altitude, distinct from the surface gradient already in.
+* Visibility tied to conditions, spent through the existing haze dither rather
+  than through any new colors.
+* A cloud base that actually occludes, so the ridge disappears into it.
+* Assertions: the shear profile is continuous and bounded; a front rotates the
+  wind through the angle it says it will, over the time it says; reduced
+  visibility only shortens the haze distance and never adds a palette entry.
 
-## v1.3 - Cabinet - SHIPPED
+## v1.9 - Logbook
 
-Audio. The biggest single known limitation is now conditional rather than
-permanent. Twenty new assertions, suite at 90.
+Structure around the flying. Moved back from v1.5 because the groundwork below
+is real work, not a footnote.
 
-* `src/worklet/fm-processor.js` computes four operator FM with real operator 1
-  feedback one sample at a time. It is loaded only when `location.protocol` is
-  http or https, so opening `index.html` from disk still fetches nothing. The
-  shadow oscillator remains the offline path, and both read the same patch
-  format. A Blob URL fallback would have made the worklet work offline too and
-  was rejected: it is runtime code generation, which this project does not do.
-* The PSG is modelled as arithmetic rather than as an audio graph: sixteen
-  attenuation steps of two decibels with the last one silent, the three fixed
-  noise dividers off a 3.579545 MHz clock, the fourth mode following tone
-  three, and periodic noise at a fifteenth of the white rate. Levels are
-  snapped to steps, so a fade is a staircase.
-* A four stage envelope stepped in attenuation units, pure enough to assert
-  without an audio context.
-* A second engine voice on seven aircraft: prop tone over the pistons, a
-  compressor whine over the jet at 8.4 times core speed, a turbine under the
-  helicopter rotor.
-* Doppler between listener and source, bounded to 0.55 and 1.9. In the cockpit
-  the listener is the source and it stays at 1.
-* Stall buffet and gear rumble on quantized noise channels.
+* Seed everything in the frame path first. The gust process and the camera
+  shake both call `Math.random` today, so nothing is reproducible until they
+  do not. This is the milestone's first task, not its last.
+* Moved back once already. Do not move it back again without saying why.
+* Deterministic replay from the input stream plus the seed. The integrator is
+  already fixed step, so once the randomness is seeded this is close to free.
+* Scoring for spot landings and the ring course, written into the flight log
+  that already exists.
+* Ghosts, and exportable recordings, so two people can compare runs without a
+  server existing anywhere. Local first multiplayer, more or less.
+* Assertions: a recorded flight replayed twice is bit identical; and a replay
+  step still completes with `Math.random` replaced by a function that throws,
+  which is the only honest way to prove the frame path is seeded.
 
-Found along the way: swapping aircraft tore down the engine voice assuming an
-oscillator graph, which threw the moment the worklet path was live. Voices now
-dispose of themselves whichever engine they ended up using.
+## v1.10 - Cartography
 
-## v1.4 - The field - SHIPPED
+A world editor, last, because a world is already a text file and the format is
+documented. This is about making it pleasant, and about closing the loose ends
+the format left behind.
 
-World content, on top of the enabling change. Twenty six new assertions, suite
-at 116.
+* A map view with structures you can place and drag, and terrain parameters
+  with a live preview.
+* Honour `runway.headingDeg`, which is currently stored and ignored.
+* More structure types, since six is a small vocabulary.
+* Several worlds kept in the settings file rather than one at a time.
+* Assertions: anything the editor writes passes the same validator an imported
+  file does; a rotated runway rotates its markings and its lights with it.
 
-* The valley is a data file. Terrain shape, runway, field, town and scatter
-  seeds, structures, camera sites and movers all live in `W.params`, loaded
-  from a world file and validated field by field. Unknown structure types are
-  dropped, out of range numbers are clamped, a foreign file or a newer schema
-  is refused. The format is documented in `docs/world-format.md`, and a loaded
-  world is saved with the settings file as an additive field, so files written
-  before v1.4 still load.
-* Night lighting: runway edge lights with green and red ends, a rotating
-  beacon that is only visible while the lamp is pointing at you, and town
-  windows lit on a fixed per building pattern. All flat unshaded faces, so
-  they read as light sources rather than as surfaces catching one.
-* An aerotow for the sailplane on the T key. The rope is a spring that pulls
-  and never pushes, the tug eases off when it feels strain, and the weak link
-  parts at 12 kN.
-* Cars on the field road and the bridge, a boat on the river, all sprite cells
-  so they cost the sprite budget rather than the polygon budget.
-* The tower camera picks the nearest site from the world file with hysteresis,
-  smooths its aim with a little lead, and zooms to hold the aircraft at a
-  constant size in frame out to 1800 metres.
+# Deferred, not declined
 
-Found along the way: the tug gated its climb on altitude, so it could never
-start climbing, and the glider just kited on the end of the rope at exactly one
-rope length above the runway. It rotates on airspeed now, like an aeroplane.
+* **PWA layer.** It has never once been the thing standing in the way, since
+  the application already works offline from `file://`. Still worth doing at
+  some point, and additive only when it happens.
+* **Tower camera on a dolly.** The fixed sites from the world file frame the
+  aircraft well. Moving shots would be nicer and are not necessary.
 
-## v1.4.1 - Cleanup and interface pass - SHIPPED
+# Deliberately not doing
 
-Not originally on the roadmap. Four milestones of features had accumulated in
-an interface that still assumed one aeroplane and a fixed list of keys.
-
-* The key legend, the quickbar and the tuning drawer are built from the
-  selected aircraft and the live bindings rather than hard coded.
-* Tuning is grouped, marks what you have changed, and every row has a stock
-  button, so one number can be undone without resetting the airframe.
-* Twelve more tunables covering buoyancy, rotor, reaction and flapping, so the
-  tuning drawer is useful on the aircraft that are not aeroplanes.
-* The roster is a keyboard operable radio group with trimmed tags.
-* Open drawers are remembered, the status line moved next to the viewport, and
-  a single first run line explains the three keys that matter.
-* Dead members removed: a render flag with no implementation and two palette
-  functions nothing called. The remaining unused exports were checked one by
-  one and kept deliberately, and the README now says so.
-* Small inline controls grow to a full 44 pixel target on a touch screen.
-
-Sixteen new assertions, suite at 132. The UI module is loaded by the headless
-runner now, because the decisions it makes are pure functions and deserve to be
-asserted like everything else.
-
-Still missing and now written down as a known limitation: there are no touch
-flight controls. The chrome is sized for touch, but flying needs a keyboard or
-a gamepad.
-
-## v1.5 - Logbook
-
-Structure around the flying, using what is already stored.
-
-* Deterministic replay. The integrator is fixed step already, so recording the
-  input stream plus the seed is enough to replay a flight exactly. This is
-  cheap and it is the foundation for everything else in this milestone.
-* Spot landing and ring course scoring, written into the existing flight log.
-* Exportable flight recordings, which means two people can compare runs without
-  a server existing anywhere. Local first multiplayer, more or less.
-* A ghost: replay a previous flight alongside the current one.
-* Assertions: a recorded flight replayed twice produces bit identical state.
-
-## Deliberately not doing
-
-* Networked multiplayer. It would require a server and would break the first
-  rule on the list.
+* Networked multiplayer. It would need a server and would break the first rule
+  on the list.
 * Textures, smooth shading, or anything above 64 colors in the viewport. That
   is a different project.
 * A physics engine dependency. The integrator being readable is the point.
 * Accounts, cloud sync, or any storage that is not a file you hold.
-* Procedural infinite terrain. The valley is small on purpose, and a place you
-  learn is worth more than a place you have never seen before.
+* Procedural infinite terrain. A place you learn is worth more than a place
+  you have never seen before.
+
+# Shipped
+
+## v1.5.0 - Cockpit
+
+Asked for from the seat, which is where the useful complaints come from. The
+deck did not fit on a laptop screen: the panel was below the fold and you had
+to scroll to see your own instruments.
+
+* The flight deck is one viewport tall and never scrolls. Header, roster,
+  viewport, quickbar and legend always fit; settings live below the fold.
+* The canvas is sized by the application in whole framebuffer pixels rather
+  than by CSS percentages. It measures the box, takes the largest whole scale
+  that fits, and sets the canvas to exactly that. Nothing is scaled by a
+  fraction at any window size.
+* A fullscreen cockpit on Enter or the quickbar button. Only the framebuffer
+  goes fullscreen, so there is nothing on the screen but the aeroplane, and
+  the scale is recalculated on the way in and the way out.
+* The roster scrolls inside its own rail rather than stretching the page.
+
+Five new assertions on the fitting rule, suite at 147. Checked at seven window
+sizes from 1920 by 1080 down to a phone.
+
+Condensed. Each entry keeps the one thing the work taught, because that is the
+part worth rereading.
+
+## v1.5.1 - Fit, again
+
+The first fit measured the stage once, during startup, before the browser had
+finished laying the page out. It then never measured again unless the window
+was resized, so the picture was sized from a box that did not exist yet and
+stayed two whole steps smaller than it could have been.
+
+* Measure again after the first two frames, and keep measuring four times a
+  second. It costs a property read and does nothing unless the answer changed.
+* Chrome trimmed: the status line moved into the quickbar row, the header and
+  the footer lost a few pixels each. On a 1899 by 953 window that was the
+  difference between a two times picture and a three times one.
+* A Picture scaling setting, because whole pixel scaling can leave up to half
+  a step of empty space and some people would rather have the size. Fill mode
+  stretches only the final blit; the framebuffer and the backing store still
+  move in whole steps.
+
+Learned: a layout measured once at startup is a layout measured at the wrong
+time.
+
+## v1.4.2 - Legibility
+
+Also not on the roadmap. Four milestones of engineering had never been looked
+at through a screenshot, and it showed. Ten new assertions, suite at 142, and a
+headless screenshot tool so the next renderer change gets looked at.
+
+* The canopy glare sampled one pixel at the left edge of the screen to decide
+  what to brighten. By then that pixel was the canopy frame, so the glare was
+  a large black and white rectangle bolted to the sky.
+* The sky dithered across the whole of every band, and the gradient was so
+  narrow that nine bit quantization collapsed eight entries into four. Wider
+  ramps, solid bands, thin seams, and a curve so the pale sky stays near the
+  horizon.
+* Haze started at 1200 metres and reached ninety percent, which is a
+  checkerboard. It starts at 2600 and stops at thirty two percent.
+* Every tree in the valley stood on a six metre invisible stalk.
+* Sprite tiers used forward distance rather than true distance, so a tree
+  seven hundred metres below the aircraft was drawn as a doubled near sprite.
+  That is what was standing in front of the flying saucer.
+* Time of day only ever recoloured the sky, so at dusk the grass went dark and
+  the river stayed noon blue. The world and craft banks follow the light now,
+  by shifting palette levels rather than multiplying, because multiplying and
+  requantizing turns a mid green into olive and a tan ridge into pink.
+* The HUD attitude ball was two shades of dark. It is sky over ground.
+* The chase camera spring was tuned for a trainer and left the jet two hundred
+  metres ahead of it, out of frame. It stiffens with speed now and has a hard
+  leash measured from the aircraft.
+
+Learned: none of this was visible in 132 passing assertions. A renderer needs
+to be looked at, and now there is a tool for looking at it.
+
+## v1.1 - Airmanship
+
+Ground effect, propeller slipstream over the tail, steerable wheels with speed
+washout, differential braking capped at what a tyre can do on dry pavement, a
+surface wind gradient on a log profile, a crash taxonomy of six named failures,
+and the engine as a state machine with a starter that cranks and refuses on a
+dry tank. 41 assertions to 56.
+
+Learned: a steering wheel behind the centre of gravity needs reversed geometry,
+or right pedal turns you left. Uncapped brake friction will flip a taildragger
+onto its nose at taxi speed.
+
+## v1.2 - Optics
+
+Sutherland Hodgman clipping against the screen rectangle, a painter key
+weighted toward the nearest vertex with an explicit bias for coplanar work,
+build time subdivision of large static faces used inside 700 metres, a contact
+shadow that is the aircraft's own convex footprint, three sprite tiers by
+distance, and an 8 x 8 dither pattern for soft edges. 56 to 70.
+
+Learned: two thirds of the fill work in a typical view was being spent on
+polygons that were entirely off screen. The full BSP that was planned turned
+out not to be needed at all.
+
+## v1.3 - Cabinet
+
+An AudioWorklet computing real operator 1 feedback, loaded only over http, with
+the shadow oscillator still serving `file://`. The PSG modelled as arithmetic:
+sixteen two decibel steps, three noise dividers, periodic noise at a fifteenth
+of the white rate. A four stage envelope. A second engine voice on seven
+aircraft. Doppler, stall buffet and gear rumble. 70 to 90.
+
+Learned: a Blob URL would have made the worklet work offline too and was
+rejected, because it is runtime code generation. Voices had to learn to dispose
+of themselves whichever engine they ended up using.
+
+## v1.4 - The field
+
+The valley became a validated data file with its own documented format. Night
+lighting on the runway, the tower beacon and the town. An aerotow for the
+sailplane on a rope that pulls and never pushes. Traffic and a boat. A tower
+camera that picks a site from the world file, smooths its aim and zooms to
+frame the aircraft. 90 to 116.
+
+Learned: the tug gated its climb on altitude, so it could never start climbing,
+and the glider just kited on the end of the rope at exactly one rope length
+above the runway.
+
+## v1.4.1 - Cleanup and interface pass
+
+Not originally on the roadmap. The key legend, the quickbar and the tuning
+drawer are built from the selected aircraft and the live bindings. Tuning is
+grouped, marks what changed, and every row has a stock button. Twelve more
+tunables for the aircraft that are not aeroplanes. The roster became a keyboard
+operable radio group. Dead members removed and the deliberate ones documented.
+116 to 132.
+
+Learned: four milestones of features had accumulated in an interface that still
+assumed one aeroplane and a fixed list of keys.
 
 ## Version and schema policy
 
@@ -197,6 +286,6 @@ Structure around the flying, using what is already stored.
 * Minor versions may add fields to the save file, and the importer keeps
   accepting every older schema it has ever accepted.
 * The schema version only increments when an old file genuinely cannot be read
-  forward, and that has not happened yet.
+  forward. That has not happened yet, through four minor versions.
 
 Make. Hack. Learn. Share. Repeat.

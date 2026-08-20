@@ -1,4 +1,4 @@
-// AERODROME :: src/03-render.js :: v1.4.0
+// AERODROME :: src/03-render.js :: v1.4.2
 // Fixed function 3D pipeline: transform, near clip, painter sort, flat shade.
 // Depends on 00-core.js, 01-palette.js, 02-raster.js.
 // GPL-3.0
@@ -10,6 +10,10 @@
   var G = AERO.render = {};
 
   G.NEAR = 0.35;
+  // Haze tuning. Distance should be suggested, not shouted.
+  G.HAZE_NEAR = 2600;
+  G.HAZE_RANGE = 6000;
+  G.HAZE_MAX = 0.32;
   G.FAR = 14000;
   G.wireframe = false;
   G.stats = { faces: 0, drawn: 0, sprites: 0, clipped: 0 };
@@ -91,12 +95,12 @@
     G.stats.faces = 0; G.stats.drawn = 0; G.stats.clipped = 0; G.stats.sprites = 0;
   };
 
-  function push(pts, color, key, ditherB, ditherT) {
+  function push(pts, color, key, ditherB, ditherT, pattern) {
     if (queueLen < queue.length) {
       var s = queue[queueLen];
-      s.pts = pts; s.color = color; s.key = key; s.db = ditherB; s.dt = ditherT;
+      s.pts = pts; s.color = color; s.key = key; s.db = ditherB; s.dt = ditherT; s.pat = pattern;
     } else {
-      queue.push({ pts: pts, color: color, key: key, db: ditherB, dt: ditherT });
+      queue.push({ pts: pts, color: color, key: key, db: ditherB, dt: ditherT, pat: pattern });
     }
     queueLen++;
   }
@@ -206,20 +210,23 @@
     if (!pts) { G.stats.clipped++; return; }
 
     var color = G.shade(mat, nrm, opts.light, opts.ambient, opts.tint);
-    // Distance haze, done by dithering toward the horizon band, never blended.
+    // Distance haze, dithered toward the horizon band and never blended. It
+    // starts further out and stops well short of a fifty percent checker,
+    // because a checkerboard reads as static rather than as distance, and it
+    // uses the long period pattern so it does not read as a grid either.
     var db = null, dt = 0;
     if (!opts.noHaze) {
-      var hz = M.clamp((z - 1200) / 5200, 0, 1);
-      if (hz > 0.02) {
+      var hz = M.clamp((z - G.HAZE_NEAR) / G.HAZE_RANGE, 0, 1);
+      if (hz > 0.04) {
         db = P.RAMP.sky.start + P.RAMP.sky.len - 1;
-        dt = hz * 0.9;
+        dt = hz * hz * G.HAZE_MAX;
       }
     }
     // Painter order. Pure centroid depth loses badly when a large polygon
     // overlaps a small near one, so the key leans on the nearest vertex.
     // opts.bias breaks ties for coplanar work like runway markings.
     var key = -(zmin * 0.6 + z * 0.4) + (opts.bias || 0);
-    push(pts, color, key, db, dt);
+    push(pts, color, key, db, dt, 'soft');
   };
 
   G.shade = function (mat, nrm, light, ambient, tint) {
@@ -259,7 +266,7 @@
       if (G.wireframe) {
         R.polyOutline(s.pts, P.RAMP.mint.start);
       } else {
-        R.fillPoly(s.pts, s.color, s.db, s.dt);
+        R.fillPoly(s.pts, s.color, s.db, s.dt, s.pat);
       }
       G.stats.drawn++;
     }
@@ -275,7 +282,8 @@
     var C = cam.fwd.y * cam.f - cam.right.y * cam.cx + cam.up.y * cam.cy;
     var K = cam.f * 0.85;
     var skyStart = P.RAMP.sky.start, skyLen = P.RAMP.sky.len;
-    var groundA = P.RAMP.grass.start + 1, groundB = P.RAMP.rock.start;
+    var groundA = P.RAMP.grass.start + 1, groundB = P.RAMP.grass.start + 2;
+    var SEAM = 0.14;
     var horizonBand = skyStart + skyLen - 1;
     var buf = R.buf, W = R.W, H = R.H;
 
@@ -286,14 +294,38 @@
         var idx;
         if (e >= 0) {
           var t = 1 - M.clamp(e / K, 0, 1); // 1 at the horizon, 0 at the zenith
+          // Curved rather than linear, so the pale bands stay near the horizon
+          // where they belong instead of washing out half the sky.
+          t = t * t * t * 0.55 + t * 0.45;
           var f = t * (skyLen - 1);
           var i0 = Math.floor(f);
-          if (i0 >= skyLen - 1) { idx = skyStart + skyLen - 1; } else {
-            idx = P.ditherPick(skyStart + i0, skyStart + i0 + 1, f - i0, x, y);
+          if (i0 >= skyLen - 1) {
+            idx = skyStart + skyLen - 1;
+          } else {
+            // Solid bands with a dithered seam between them. Dithering the
+            // whole band turned the sky into a checkerboard, which is the one
+            // thing a Genesis sky never was.
+            var frac = f - i0;
+            if (frac < 0.5 - SEAM) { idx = skyStart + i0; }
+            else if (frac > 0.5 + SEAM) { idx = skyStart + i0 + 1; }
+            else {
+              idx = P.ditherPick(skyStart + i0, skyStart + i0 + 1,
+                (frac - (0.5 - SEAM)) / (SEAM * 2), x, y, 'soft');
+            }
           }
         } else {
+          // Ground beyond the terrain mesh. Solid, with one dithered band at
+          // the horizon so the seam is not a hard line.
           var g = M.clamp(-e / (K * 0.75), 0, 1);
-          idx = P.ditherPick(horizonBand, g > 0.5 ? groundB : groundA, M.clamp(g * 1.6, 0, 1), x, y);
+          if (g < 0.10) {
+            idx = P.ditherPick(horizonBand, groundA, g / 0.10, x, y, 'soft');
+          } else if (g < 0.26) {
+            idx = groundA;
+          } else if (g < 0.40) {
+            idx = P.ditherPick(groundA, groundB, (g - 0.26) / 0.14, x, y, 'soft');
+          } else {
+            idx = groundB;
+          }
         }
         buf[base + x] = idx;
       }
@@ -423,21 +455,42 @@
   // distance, a speck beyond the range where a cell is legible at all.
   G.SPRITE_NEAR = 190;
   G.SPRITE_FAR = 1250;
+  // Past this a tree is one or two pixels of noise on a hillside rather than
+  // information about a hillside.
+  G.SPRITE_CULL = 2300;
+
+  // Which tier a sprite belongs in, by true distance. Exposed because the
+  // rule matters: judging by forward distance alone put a tree seven hundred
+  // metres below the aircraft into the near tier.
+  G.tierFor = function (dist) {
+    if (dist > G.SPRITE_CULL) { return 'cull'; }
+    if (dist < G.SPRITE_NEAR) { return 'near'; }
+    if (dist < G.SPRITE_FAR) { return 'mid'; }
+    return 'far';
+  };
 
   G.drawBillboard = function (cam, name, world, flipH, speckIdx) {
     var v = G.toView(cam, world);
-    if (v.z < 2 || v.z > 3500) { return false; }
+    if (v.z < 2) { return false; }
+    // Tier and cull on the true distance to the sprite, not on how far ahead
+    // of the camera it is. Judging by forward distance alone drew a tree that
+    // was seven hundred metres below the aircraft as if it were thirty metres
+    // ahead of it, which is how a tree ends up standing in front of a flying
+    // saucer.
+    var dist = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    var tier = G.tierFor(dist);
+    if (tier === 'cull') { return false; }
     var p = G.project(cam, v);
     var c = R.cells[name];
     if (!c) { return false; }
     if (p.x < -64 || p.x > R.W + 64 || p.y < -64 || p.y > R.H + 64) { return false; }
     var ok;
-    if (v.z < G.SPRITE_NEAR) {
+    if (tier === 'near') {
       ok = R.drawCellScaled(name, p.x - c.w, p.y - c.h * 2, flipH, 2);
-    } else if (v.z < G.SPRITE_FAR) {
+    } else if (tier === 'mid') {
       ok = R.drawCell(name, p.x - c.w / 2, p.y - c.h, flipH);
     } else {
-      var size = v.z > 2400 ? 1 : 2;
+      var size = 2;
       ok = R.drawSpeck(p.x, p.y - size, speckIdx || c.data[(c.h - 1) * c.w + (c.w >> 1)] || 1, size);
     }
     if (ok) { G.stats.sprites++; }

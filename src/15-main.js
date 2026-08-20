@@ -1,4 +1,4 @@
-// AERODROME :: src/15-main.js :: v1.4.1
+// AERODROME :: src/15-main.js :: v1.5.1
 // The application: one fixed step loop, one render order, one control map.
 // Depends on every other file. Loads last.
 // GPL-3.0
@@ -36,6 +36,7 @@
     R.setSize(320, S.state.settings.resolution);
     R.attach(canvas);
     R.resizeInner();
+    app.fitCanvas();
 
     app.rig = C.create();
     app.env = X.env;
@@ -72,18 +73,107 @@
     if (S.state.build <= 1) {
       U.showFirstRun();
     }
+    // Resizing the window, or entering and leaving fullscreen, both mean the
+    // whole number scale has to be worked out again.
+    var refit = function () {
+      app.fitCanvas(true);
+      var stage = document.getElementById('stage');
+      var full = document.fullscreenElement === stage || document.webkitFullscreenElement === stage;
+      document.documentElement.setAttribute('data-fullscreen', full ? 'on' : 'off');
+      U.markFullscreen(full);
+      if (full) { canvas.focus(); }
+    };
+    window.addEventListener('resize', function () { app.fitCanvas(true); refit(); });
+    document.addEventListener('fullscreenchange', refit);
+    document.addEventListener('webkitfullscreenchange', refit);
+    refit();
+    // Layout is not final on the first pass. Measure again once the browser
+    // has drawn, which is what the old single measurement got wrong: the
+    // picture was sized from a box that had not settled yet.
+    requestAnimationFrame(function () {
+      app.fitCanvas(true);
+      requestAnimationFrame(function () { app.fitCanvas(true); });
+    });
+
     canvas.focus();
     app.last = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     requestAnimationFrame(app.frameStep);
     U.setStatus('Ready. Click the viewport, then push the throttle with W.');
   };
 
+  // -------------------------------------------------------------- fitting
+  // The canvas is sized in whole framebuffer pixels, every time, so the
+  // picture is never scaled by a fraction and the deck never overflows the
+  // window. This is also what makes fullscreen sharp rather than smeared.
+  app.fitCanvas = function (force) {
+    var canvas = document.getElementById('screen');
+    var stage = document.getElementById('stage');
+    if (!canvas || !stage) { return 1; }
+    var full = document.fullscreenElement === stage || document.webkitFullscreenElement === stage;
+    var boxW = full ? window.innerWidth : stage.clientWidth;
+    var boxH = full ? window.innerHeight : stage.clientHeight;
+    // Before the first layout the stage can measure zero. Fall back to the
+    // window rather than picking a scale from nothing.
+    if (boxW < 8) { boxW = window.innerWidth - 40; }
+    if (boxH < 8) { boxH = Math.max(180, window.innerHeight * 0.6); }
+
+    var scale = U.fitScale(boxW, boxH, R.W, R.H);
+    var fill = S.state.settings.scaleMode === 'fill';
+    // In fill mode the backing store still moves in whole steps, so the
+    // rendering is unchanged. Only the final blit to the screen is stretched,
+    // and only by the fraction left over above the last whole step.
+    var cssW = R.W * scale, cssH = R.H * scale;
+    if (fill) {
+      var size = U.fillSize(boxW, boxH, R.W, R.H);
+      cssW = size.w;
+      cssH = size.h;
+    }
+    var key = scale + ':' + cssW + 'x' + cssH + ':' + R.W + 'x' + R.H;
+    if (!force && key === app.fitKey) { return scale; }
+    app.fitKey = key;
+
+    canvas.width = R.W * scale;
+    canvas.height = R.H * scale;
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    R.attach(canvas);
+    R.resizeInner();
+    app.scale = scale;
+    return scale;
+  };
+
+  app.setScaleMode = function (mode) {
+    S.state.settings.scaleMode = (mode === 'fill') ? 'fill' : 'whole';
+    S.save();
+    app.fitCanvas(true);
+  };
+
+  app.toggleFullscreen = function () {
+    var stage = document.getElementById('stage');
+    if (!stage) { return; }
+    var doc = document;
+    var full = doc.fullscreenElement === stage || doc.webkitFullscreenElement === stage;
+    try {
+      if (full) {
+        if (doc.exitFullscreen) { doc.exitFullscreen(); }
+        else if (doc.webkitExitFullscreen) { doc.webkitExitFullscreen(); }
+      } else if (stage.requestFullscreen) {
+        stage.requestFullscreen({ navigationUI: 'hide' });
+      } else if (stage.webkitRequestFullscreen) {
+        stage.webkitRequestFullscreen();
+      } else {
+        U.setStatus('This browser will not give us the whole screen', 'warn');
+      }
+    } catch (e) {
+      U.setStatus('Fullscreen was refused by the browser', 'warn');
+    }
+  };
+
   app.applySettings = function () {
     var s = S.state.settings;
     document.documentElement.setAttribute('data-theme', s.theme);
     R.setSize(320, s.resolution);
-    R.resizeInner();
-    document.getElementById('screen').classList.toggle('tall', s.resolution === 240);
+    app.fitCanvas();
     R.flickerEnabled = s.spriteFlicker;
     G.wireframe = s.wireframe;
     I.hudVisible = s.hud;
@@ -252,8 +342,7 @@
   app.setResolution = function (v) {
     S.state.settings.resolution = v;
     R.setSize(320, v);
-    R.resizeInner();
-    document.getElementById('screen').classList.toggle('tall', v === 240);
+    app.fitCanvas();
     S.save();
   };
   app.setReducedMotion = function (v) {
@@ -402,6 +491,7 @@
       var id = events[i];
       var st = app.state, c = st.controls;
       if (id === 'camera') { app.cycleCamera(); }
+      else if (id === 'fullscreen') { app.toggleFullscreen(); }
       else if (id === 'lookSnap') { C.snapForward(app.rig); }
       else if (id === 'pause') { app.togglePause(); }
       else if (id === 'mute') { app.toggleMute(); }
@@ -571,6 +661,10 @@
       uiTimer = 0;
       U.tickReadouts();
       U.markContextual();
+      // The box can change without a resize event: a font arrives, the first
+      // run hint is dismissed, a drawer opens. Measuring costs nothing and
+      // nothing happens unless the answer changed.
+      app.fitCanvas();
     }
     saveTimer += dt;
     if (saveTimer > 15) { saveTimer = 0; app.persistWeather(); }

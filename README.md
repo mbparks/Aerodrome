@@ -1,6 +1,6 @@
 # AERODROME
 
-<!-- AERODROME :: README.md :: v1.4.1 -->
+<!-- AERODROME :: README.md :: v1.5.1 -->
 
 A browser flight simulator that renders as if it were running on a Sega Genesis.
 Software rasterizer, 320 by 224 framebuffer, 64 colors on screen drawn from a
@@ -13,7 +13,7 @@ jet, a sailplane, a hot air balloon, a blimp, a flying saucer, a helicopter,
 an autogyro, an ornithopter, a paper airplane and a lifting body rocket all run
 through the same integrator. What differs between them is data.
 
-Version 1.4.1. License GPL-3.0.
+Version 1.5.1. License GPL-3.0.
 
 New in 1.1, the Airmanship milestone: ground effect, propeller slipstream over
 the tail, steerable wheels and differential braking, a surface wind gradient, a
@@ -36,6 +36,13 @@ that frames the aircraft instead of staring past it.
 
 1.4.1 is a cleanup and interface pass: the key legend, the quickbar and the
 tuning drawer are all built from the aircraft you are actually flying.
+
+1.5.0 puts the whole flight deck on one screen and adds a fullscreen cockpit.
+
+1.4.2 is a legibility pass on the picture itself: banded skies instead of
+checkerboards, haze that suggests distance instead of shouting it, a palette
+that follows the light, sprites that stand on the ground and are sized by how
+far away they actually are, and a chase camera that keeps up with a jet.
 
 The roadmap for what comes next is in `docs/ROADMAP.md`.
 
@@ -85,6 +92,8 @@ The simulator itself does not need that folder, but the repository does.
     src/13-tests.js       the assertions
     src/14-ui.js          the HTML chrome around the viewport
     src/15-main.js        the loop that ties it together
+    tools/run-tests.js    the assertion suite, headless
+    tools/screenshot.js   renders a named scene to an image, headless
 
 ### Load order
 
@@ -99,8 +108,31 @@ right place, and add it to `tests.html` if the tests need it.
 
 ## The interface
 
-The chrome around the viewport follows the aircraft rather than listing
-everything the simulator can do:
+The flight deck is exactly one screen tall and never scrolls. The header, the
+roster, the viewport, the quickbar and the key legend always fit the window,
+whatever size it is, and the settings drawers live below the fold where you go
+looking for them on purpose.
+
+The framebuffer is only ever scaled by a whole number. The application
+measures the space it has been given, picks the largest whole scale that fits,
+and sizes the canvas to exactly that many pixels. Nothing is ever scaled by a
+fraction, which is why the picture stays sharp at any window size. It keeps
+measuring, too: a font arriving, a hint being dismissed or a drawer opening
+all change the box, and none of them fire a resize event.
+
+Whole pixel scaling can leave up to half a step of empty space, since three
+times is three times and there is no such thing as three and a half. If you
+would rather have the size, the View drawer has a Picture scaling setting:
+Fill the space stretches the final blit to the room available. The rendering
+is identical either way, only the last step to the screen changes.
+
+Press Enter, or the Fullscreen button, and the viewport takes the whole
+screen with nothing else on it. Escape comes back. The scale is recalculated
+on the way in and on the way out, so fullscreen is a bigger picture rather
+than a stretched one.
+
+The rest of the chrome follows the aircraft rather than listing everything the
+simulator can do:
 
 * the key legend under the viewport is built per aircraft from the live
   bindings, so a balloon offers the burner and the vent and never mentions a
@@ -136,6 +168,7 @@ locally and travels inside the export file.
 | Engine cut, then crank to restart | O |
 | Call for a tow, then release it | T |
 | Cycle camera | V |
+| Fullscreen cockpit | Enter |
 | Snap view forward | N |
 | Look around | I, J, K, L, or hold the right mouse button |
 | Toggle HUD | U |
@@ -210,10 +243,25 @@ Saved airframes can be archived or deleted. Delete is a soft delete: the record
 stays in the file with a timestamp and can be restored. Nothing is destroyed
 except by the explicit Clear all local data button.
 
+## Looking at the picture
+
+`tools/screenshot.js` renders a scene headless and writes a PPM, with no
+dependencies and no browser:
+
+    node tools/screenshot.js                 list the scenes
+    node tools/screenshot.js ridge out.ppm   render one
+
+Every graphics bug fixed in 1.4.2 was invisible in the numbers and obvious in a
+frame: a canopy glare that sampled the wrong pixel and painted a black
+rectangle across the sky, trees standing on six metre invisible stalks, sprites
+tiered by how far ahead of the camera they were rather than how far away, and a
+chase camera two hundred metres behind a jet. If you change the renderer, look
+at a frame.
+
 ## Self test
 
 The Diagnostics drawer has a self test button, and `tests.html` runs the same
-suite. As of v1.4.1 it is 132 assertions, all passing, covering:
+suite. As of v1.5.1 it is 150 assertions, all passing, covering:
 
 * the palette stays inside the 512 color space and never exceeds 64 entries
 * index 0 of each bank is the transparency slot
@@ -261,6 +309,19 @@ suite. As of v1.4.1 it is 132 assertions, all passing, covering:
   roster
 * the key legend never advertises a control the aircraft does not have, and it
   follows a rebound key
+* sprite tiers are chosen by true distance, so a tree far below the aircraft is
+  not drawn as a near one
+* scatter sprites are anchored on the ground rather than floating above it
+* the sky reads as bands rather than as static, and haze is capped well below a
+  checkerboard
+* dimming the palette never inverts a hue, and full daylight leaves it exactly
+  as authored
+* the canopy glare never paints white over the sky
+* the HUD horizon shows sky over ground
+* the framebuffer is only ever scaled by a whole number, the result always
+  fits the box it was given, and it is the largest scale that does
+* fill mode stays inside the box, does not distort the picture, and is never
+  smaller than whole pixel mode
 
 ## Known limitations
 
@@ -275,6 +336,10 @@ suite. As of v1.4.1 it is 132 assertions, all passing, covering:
   On a slow machine, the 320 by 240 mode and a crowded view over the town will
   cost frames. The frame budget readout in the Diagnostics drawer tells you
   where the time goes.
+* **Nine bit color has eight levels a channel, and dimming can flatten a
+  hue.** The palette darkens by shifting levels rather than by multiplying, so
+  hues never invert, but a colour that is already dim has nowhere left to go
+  and can go grey at dusk. That is the hardware, not a bug.
 * **Sorting is painter order, weighted toward the nearest vertex.** Genuinely
   intersecting polygons still cannot be resolved, because painter order sorts
   whole faces. Splitting the large static geometry at build time makes this
@@ -291,14 +356,18 @@ suite. As of v1.4.1 it is 132 assertions, all passing, covering:
 * **Tower camera sites are fixed points from the world file.** The camera
   picks the nearest one, smooths its aim and zooms to frame the aircraft, but
   it does not track along a dolly or choose a shot for dramatic effect.
-* **No PWA layer in v1.0.** The application already works offline from
-  `file://`, so a service worker would add moving parts without adding
-  capability. If it ships later it will be additive only.
+* **No PWA layer.** The application already works offline from `file://`, so a
+  service worker would add moving parts without adding capability. Deferred
+  rather than declined, and additive only if it ships.
+* **The gust process and the camera shake call `Math.random` directly.** No two
+  flights are alike, which is fine until replay exists. Seeding them is the
+  first task of the Logbook milestone rather than an afterthought inside it.
 * **Gamepad rebinding is keyboard first.** The default pad map is sensible, but
-  the rebinding capture in the Controls drawer listens for keys.
+  the rebinding capture in the Controls drawer listens for keys. This is the
+  next milestone.
 * **There are no touch flight controls.** The interface chrome is sized for
   touch, but flying still needs a keyboard or a gamepad. An on screen stick and
-  throttle would be a real addition and is not in yet.
+  throttle is the milestone after that.
 * **A few exported members exist for people reading the source rather than for
   the simulator itself**: `P.hex`, `R.FONT_W`, `F.advance` and friends. They
   are deliberate, not leftovers.

@@ -1,4 +1,4 @@
-// AERODROME :: src/09-camera.js :: v1.4.0
+// AERODROME :: src/09-camera.js :: v1.4.2
 // Cockpit eye point, trailing spring damper chase, and a tower view.
 // Depends on 00-core.js, 03-render.js, 07-world.js.
 // GPL-3.0
@@ -83,14 +83,27 @@
         rig.chaseInit = true;
       }
       // Spring damper. The camera sags under acceleration and swings wide in
-      // a hard turn because it is chasing a point, not welded to one.
-      var k = s.lag * s.lag;
-      var c = 2 * s.damping * s.lag;
+      // a hard turn because it is chasing a point, not welded to one. The
+      // spring stiffens with speed, because a fixed spring that feels right
+      // behind a trainer leaves the jet two hundred metres ahead of it and
+      // out of frame.
+      var speed = V.len(st.vel);
+      var stiff = s.lag * (1 + M.clamp(speed / 70, 0, 2.4));
+      var k = stiff * stiff;
+      var c = 2 * s.damping * stiff;
       var err = V.sub(desired, rig.chasePos);
       rig.chaseVel.x += (err.x * k - rig.chaseVel.x * c) * dt;
       rig.chaseVel.y += (err.y * k - rig.chaseVel.y * c) * dt;
       rig.chaseVel.z += (err.z * k - rig.chaseVel.z * c) * dt;
       rig.chasePos = V.addTo(V.copy(rig.chasePos), rig.chaseVel, dt);
+      // Hard leash, measured from the aircraft rather than from the point the
+      // spring is chasing, so the lead term cannot quietly double it.
+      var leash = s.dist * 2 + 12;
+      var slip = V.sub(rig.chasePos, st.pos);
+      var slipLen = V.len(slip);
+      if (slipLen > leash) {
+        rig.chasePos = V.add(st.pos, V.scale(slip, leash / slipLen));
+      }
       var floor = W.heightAt(rig.chasePos.x, rig.chasePos.z) + 2.2;
       if (rig.chasePos.y < floor) { rig.chasePos.y = floor; rig.chaseVel.y = Math.max(0, rig.chaseVel.y); }
       cam.pos = V.copy(rig.chasePos);
@@ -135,7 +148,10 @@
       // Frame the aircraft to a roughly constant size, then damp the zoom so
       // it does not pump on a close pass.
       var span = (st.ac.wing && st.ac.wing.spanM) ? st.ac.wing.spanM : 8;
-      var wantFov = M.clamp(M.deg(2 * Math.atan((span * 2.6) / Math.max(12, d))), 9, 62);
+      // Not below twenty two degrees. A nine degree lens on an aircraft a
+      // kilometre away fills the frame with one hillside, which is a shot of
+      // a hillside, not a shot of an aeroplane.
+      var wantFov = M.clamp(M.deg(2 * Math.atan((span * 2.6) / Math.max(12, d))), 22, 62);
       rig.viewFov = rig.viewFov ? M.lerp(rig.viewFov, wantFov, M.clamp(dt * 2.2, 0, 1)) : wantFov;
       cam.fovDeg = rig.viewFov;
     }

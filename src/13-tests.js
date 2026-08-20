@@ -1,4 +1,4 @@
-// AERODROME :: src/13-tests.js :: v1.4.1
+// AERODROME :: src/13-tests.js :: v1.5.1
 // Assertions that must pass before a release is called done. Runs in the
 // browser from the self test button, from tests.html, or headless.
 // Depends on every engine file except the UI and the main loop.
@@ -9,7 +9,7 @@
   var M = AERO.math, V = AERO.vec3, Q = AERO.quat;
   var P = AERO.palette, R = AERO.raster, G = AERO.render;
   var F = AERO.flight, AC = AERO.aircraft, W = AERO.world, X = AERO.weather, S = AERO.storage;
-  var IN = AERO.input;
+  var IN = AERO.input, I = AERO.instruments;
 
   var T = AERO.tests = {};
   var results = [];
@@ -758,6 +758,156 @@
       && U.tagsFor(AC.byId('helicopter')).indexOf('ROTOR') >= 0
       && U.tagsFor(AC.byId('autogyro')).indexOf('AUTOROTATES') >= 0);
     ok('an ordinary aeroplane carries no tags at all', U.tagsFor(AC.byId('trainer')).length === 0);
+
+    // Fitting the framebuffer into whatever box it is given. Whole numbers
+    // only, and it must never hand back something larger than the box, which
+    // is what used to push the panel off the bottom of the window.
+    var boxes = [[1664, 896], [1184, 716], [1024, 616], [640, 400], [406, 600], [1920, 1080]];
+    var whole = true, fits = true, largest = true;
+    for (var b = 0; b < boxes.length; b++) {
+      var sc = U.fitScale(boxes[b][0], boxes[b][1], 320, 224);
+      if (sc !== Math.floor(sc) || sc < 1) { whole = false; }
+      if (sc > 1 && (320 * sc > boxes[b][0] || 224 * sc > boxes[b][1])) { fits = false; }
+      if (320 * (sc + 1) <= boxes[b][0] && 224 * (sc + 1) <= boxes[b][1]) { largest = false; }
+    }
+    ok('the framebuffer is only ever scaled by a whole number', whole);
+    ok('the scaled picture always fits the box it was given', fits);
+    ok('and it takes the largest scale that fits', largest);
+    ok('a box smaller than the framebuffer still gets scale one',
+      U.fitScale(200, 150, 320, 224) === 1 && U.fitScale(0, 0, 320, 224) === 1);
+    ok('the taller framebuffer is fitted on its own terms',
+      U.fitScale(1000, 700, 320, 240) === 2 && U.fitScale(1000, 480, 320, 240) === 2);
+
+    // Fill mode trades whole pixels for size. It must still respect the box
+    // and must not distort the picture.
+    var okFill = true, aspect = true;
+    for (b = 0; b < boxes.length; b++) {
+      var f = U.fillSize(boxes[b][0], boxes[b][1], 320, 224);
+      if (f.w > boxes[b][0] || f.h > boxes[b][1]) { okFill = false; }
+      if (Math.abs(f.w / f.h - 320 / 224) > 0.01) { aspect = false; }
+    }
+    ok('fill mode stays inside the box', okFill);
+    ok('fill mode does not distort the picture', aspect);
+    ok('fill mode is never smaller than whole pixel mode',
+      U.fillSize(1659, 805, 320, 224).h >= 224 * U.fitScale(1659, 805, 320, 224));
+  };
+
+  // ----------------------------------------------------------- legibility
+  // The picture is the product. These assertions exist because every one of
+  // them failed at least once in a screenshot.
+  T.legibility = function () {
+    R.setSize(320, 224);
+
+    // Sprite tiers go by true distance. A tree directly below the aircraft is
+    // far away even though it is barely ahead of the camera.
+    ok('sprite tiers are chosen by distance', G.tierFor(50) === 'near'
+      && G.tierFor(600) === 'mid' && G.tierFor(1800) === 'far' && G.tierFor(4000) === 'cull');
+    var cam = G.makeCamera();
+    cam.pos = V.make(0, 700, 0);
+    cam.quat = Q.fromEuler(0, M.rad(-12), 0);
+    G.updateCamera(cam);
+    var below = G.toView(cam, V.make(0, 0, 40));
+    var trueDist = Math.sqrt(below.x * below.x + below.y * below.y + below.z * below.z);
+    ok('a sprite far below the camera is not treated as a near one',
+      G.tierFor(trueDist) !== 'near' && below.z < trueDist * 0.6,
+      'forward ' + below.z.toFixed(0) + ' m, true ' + trueDist.toFixed(0) + ' m');
+
+    // Scatter sprites sit on the ground rather than on an invisible stalk.
+    var anchored = true, sampled = 0;
+    var realDraw = G.drawBillboard;
+    G.drawBillboard = function (c, name, world) {
+      for (var i = 0; i < W.scatter.length; i++) {
+        var sc = W.scatter[i];
+        if (Math.abs(sc.x - world.x) < 0.001 && Math.abs(sc.z - world.z) < 0.001) {
+          sampled++;
+          if (Math.abs(world.y - sc.y) > 0.001) { anchored = false; }
+        }
+      }
+      return false;
+    };
+    var scam = G.makeCamera();
+    scam.pos = V.make(0, W.RUNWAY.elev + 30, 0);
+    scam.quat = Q.fromEuler(0, 0, 0);
+    G.updateCamera(scam);
+    W.emitSprites(scam, X.env, 0, 0);
+    G.drawBillboard = realDraw;
+    ok('scatter sprites are anchored on the ground', anchored && sampled > 0,
+      sampled + ' checked');
+
+    // Haze suggests distance. It must never reach a fifty percent checker.
+    ok('haze is capped well below a checkerboard', G.HAZE_MAX <= 0.35, G.HAZE_MAX);
+
+    // The sky is banded, not stippled. Most of a sky column should be solid
+    // runs of one entry, with thin dithered seams between them.
+    R.clear(0);
+    var scene = G.makeCamera();
+    scene.pos = V.make(0, 400, 0);
+    scene.quat = Q.fromEuler(0, 0, 0);
+    G.updateCamera(scene);
+    P.applyTimeOfDay(12);
+    G.drawSkyPlane(scene, { hour: 12 });
+    var x = 90, solid = 0, total = 0, runs = 0, last = -1, runLen = 0;
+    for (var y = 0; y < 100; y++) {
+      var v = R.buf[y * R.W + x];
+      total++;
+      if (v === last) { runLen++; } else { if (runLen > 2) { solid += runLen; } runs++; last = v; runLen = 1; }
+    }
+    if (runLen > 2) { solid += runLen; }
+    ok('the sky reads as bands rather than as static', solid / total > 0.75,
+      Math.round(solid / total * 100) + ' percent solid, ' + runs + ' runs');
+
+    // Relighting the world palette must not change hue, and at full daylight
+    // it must not change anything at all.
+    P.applyTimeOfDay(12);
+    var noon = P.codes.slice(0, 16);
+    P.applyTimeOfDay(20);
+    var dusk = P.codes.slice(0, 16);
+    var darker = true, inverted = '';
+    function order(a, b) { return a > b ? 1 : (a < b ? -1 : 0); }
+    for (var i = 1; i < 15; i++) {
+      var a = P.expand(noon[i]), b = P.expand(dusk[i]);
+      if (b.r > a.r + 1 && b.g > a.g + 1 && b.b > a.b + 1) { darker = false; }
+      // Hue is which channel leads. Nine bit color has eight levels a
+      // channel, so a dim green like level (1,2,1) has nowhere left to go and
+      // can flatten to grey. That is the hardware, and it is allowed. What is
+      // never allowed is an inversion: a green that dims into a red.
+      var pairs = [['r', 'g'], ['g', 'b'], ['r', 'b']];
+      for (var q = 0; q < pairs.length; q++) {
+        var oa = order(a[pairs[q][0]], a[pairs[q][1]]);
+        var ob = order(b[pairs[q][0]], b[pairs[q][1]]);
+        if (oa !== 0 && ob !== 0 && oa !== ob) {
+          inverted = 'entry ' + i + ' ' + pairs[q].join('/');
+        }
+      }
+    }
+    ok('dusk darkens the world palette', darker);
+    ok('dimming never inverts a hue', inverted === '', inverted);
+    P.applyTimeOfDay(12);
+    var again = P.codes.slice(0, 16);
+    var identical = true;
+    for (i = 0; i < 16; i++) { if (again[i] !== noon[i]) { identical = false; } }
+    ok('full daylight leaves the world palette exactly as authored', identical);
+
+    // The canopy glare brightens the sky rather than painting white on it.
+    R.clear(P.RAMP.sky.start + 4);
+    var ac = AC.byId('trainer');
+    var rig = AERO.camera.create();
+    I.drawCanopy(ac, rig, { });
+    var whites = 0;
+    for (i = 0; i < R.W * R.H; i++) { if (R.buf[i] === P.RAMP.white.start) { whites++; } }
+    ok('the canopy glare never paints white over the sky', whites === 0, whites + ' white pixels');
+
+    // The attitude ball in the HUD has to be sky over ground, not two darks.
+    R.clear(0);
+    I.hudVisible = true;
+    I.drawHUD(ac, { airspeed: 40, altitude: 300, vsi: 0, heading: 0, bank: 0, pitch: 0, stalled: false }, {});
+    var sky = 0, ground = 0;
+    for (i = 0; i < R.W * R.H; i++) {
+      if (R.buf[i] === P.RAMP.sky.start + 3) { sky++; }
+      if (R.buf[i] === P.RAMP.grass.start + 1) { ground++; }
+    }
+    ok('the HUD horizon shows sky over ground', sky > 20 && ground > 20,
+      sky + ' sky, ' + ground + ' ground');
   };
 
   // ---------------------------------------------------------- world model
@@ -839,7 +989,7 @@
     results = [];
     var groups = ['palette', 'raster', 'attitude', 'camera', 'energy', 'trim',
       'airmanship', 'engine', 'damage', 'gradient', 'optics', 'cabinet',
-      'field', 'chrome', 'world', 'storage', 'roster'];
+      'field', 'chrome', 'legibility', 'world', 'storage', 'roster'];
     groups.forEach(function (g) {
       try {
         T[g]();

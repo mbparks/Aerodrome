@@ -1,4 +1,4 @@
-// AERODROME :: src/10-instruments.js :: v1.1.0
+// AERODROME :: src/10-instruments.js :: v1.4.2
 // Every instrument is drawn into the framebuffer with the panel palette bank.
 // Depends on 00-core.js, 01-palette.js, 02-raster.js.
 // GPL-3.0
@@ -275,10 +275,26 @@
     R.vline(Math.round(R.W * 0.22) + off + 1, top, ac.panel.cutTop - 6, C.bezel);
     R.vline(Math.round(R.W * 0.78) + off, top, ac.panel.cutTop - 6, frameIdx);
     R.vline(Math.round(R.W * 0.78) + off - 1, top, ac.panel.cutTop - 6, C.bezel);
-    // Glare band, dithered across the upper glass.
-    for (var y = 6; y < 30; y++) {
-      var tt = 1 - (y - 6) / 24;
-      R.hlineDither(y, 4 + off, Math.round(R.W * 0.5) + off, R.get(0, y), P.RAMP.white.start, tt * 0.35);
+    // Glare on the upper glass. It brightens whatever is actually behind it,
+    // pixel by pixel. The old version sampled one pixel at the left edge of
+    // the screen, which by then was the canopy frame, so the glare was a
+    // large black and white rectangle bolted to the sky.
+    var glareRight = Math.round(R.W * 0.5) + off;
+    for (var y = 5; y < 26; y++) {
+      var tt = (1 - (y - 5) / 21) * 0.16;
+      if (tt <= 0.01) { continue; }
+      for (var x = Math.max(4, 4 + off); x < glareRight; x++) {
+        if (x < 0 || x >= R.W) { continue; }
+        var src = R.get(x, y);
+        if (src === frameIdx || src === C.bezel) { continue; }
+        // Brighten by one ramp step rather than toward white. Dithering the
+        // sky against pure white put a field of white dots in the corner of
+        // every forward view.
+        var sky0 = P.RAMP.sky.start, sky1 = sky0 + P.RAMP.sky.len - 1;
+        var up = (src >= sky0 && src < sky1) ? src + 1 : P.RAMP.white.start;
+        if (up === src) { continue; }
+        R.px(x, y, P.ditherPick(src, up, tt * 2.2, x, y, 'soft'));
+      }
     }
   };
 
@@ -298,11 +314,15 @@
     var cx = R.W - 34, cy = 20, r = 14;
     var sb = Math.sin(d.bank), cb = Math.cos(d.bank);
     var pitchPx = M.deg(d.pitch) * (r / 45);
+    // Sky over ground, in sky and ground colors. It used to be two shades of
+    // dark, which is not an attitude indicator, it is a hole.
+    var hudSky = P.RAMP.sky.start + 3;
+    var hudGnd = P.RAMP.grass.start + 1;
     for (var i = -r; i <= r; i++) {
       var hw = Math.floor(Math.sqrt(Math.max(0, r * r - i * i)));
       for (var j = -hw; j <= hw; j++) {
         var ry = -j * sb + i * cb;
-        R.px(cx + j, cy + i, (ry < -pitchPx) ? C.hudLo : C.dark);
+        R.px(cx + j, cy + i, (ry < -pitchPx) ? hudSky : hudGnd);
       }
     }
     R.circle(cx, cy, r, C.hudHi, false);
