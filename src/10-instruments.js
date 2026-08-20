@@ -1,4 +1,4 @@
-// AERODROME :: src/10-instruments.js :: v1.4.2
+// AERODROME :: src/10-instruments.js :: v1.10.0
 // Every instrument is drawn into the framebuffer with the panel palette bank.
 // Depends on 00-core.js, 01-palette.js, 02-raster.js.
 // GPL-3.0
@@ -203,11 +203,34 @@
   }
 
   // ----------------------------------------------------------------- panel
-  I.drawPanel = function (ac, d, t, opts) {
+  I.drawPanel = function (ac, d, t, opts, off) {
     var panel = ac.panel;
     if (!panel) { return; }
     var scaleY = R.H / 224;
-    var shape = panel.shape.map(function (p) { return { x: p[0] * (R.W / 320), y: p[1] * scaleY }; });
+    // Head look slides the whole panel, instruments and all, because that is
+    // what a panel a metre away does when you turn your head.
+    var ox = off ? off.x : 0, oy = off ? off.y : 0;
+    var shape = panel.shape.map(function (p) {
+      return { x: p[0] * (R.W / 320) + ox, y: p[1] * scaleY + oy };
+    });
+    // The panel is a hole cut in the bottom of the screen. When it slides, the
+    // ends have to run off both edges or the slide opens a gap of sky where
+    // the aeroplane should be.
+    if (ox !== 0 || oy !== 0) {
+      // The ends run out flat at the height of the coaming, not at the height
+      // of the bottom corner, or the extension is a horizontal edge the
+      // scanline never crosses and the slide still opens a gap.
+      var pad = Math.abs(ox) + R.W;
+      var leftY = (shape.length > 1 ? shape[1].y : shape[0].y);
+      var rightY = (shape.length > 1 ? shape[shape.length - 2].y : shape[0].y);
+      shape = [{ x: -pad, y: leftY }]
+        .concat(shape)
+        .concat([
+          { x: R.W + pad, y: rightY },
+          { x: R.W + pad, y: R.H + Math.abs(oy) + 60 },
+          { x: -pad, y: R.H + Math.abs(oy) + 60 }
+        ]);
+    }
     R.fillPoly(shape, C.face);
     // Panel edge highlight, one pixel, so the cut reads as a shape.
     for (var i = 0; i < shape.length - 1; i++) {
@@ -216,18 +239,18 @@
     var g, k;
     for (var j = 0; j < (panel.gauges || []).length; j++) {
       g = panel.gauges[j];
-      var gg = { x: g.x * (R.W / 320), y: g.y * scaleY, r: g.r };
+      var gg = { x: g.x * (R.W / 320) + ox, y: g.y * scaleY + oy, r: g.r };
       k = GAUGE[g.k];
       if (k) { k(gg, d, t); }
     }
     for (var m = 0; m < (panel.tapes || []).length; m++) {
       var tp = panel.tapes[m];
-      if (tp.k === 'asi') { tape(tp.x * (R.W / 320), tp.y * scaleY, tp.h, d.airspeed, 20, 'IAS', C.mint); }
-      if (tp.k === 'alt') { tape(tp.x * (R.W / 320), tp.y * scaleY, tp.h, d.altitude, 200, 'ALT', C.mint); }
+      if (tp.k === 'asi') { tape(tp.x * (R.W / 320) + ox, tp.y * scaleY + oy, tp.h, d.airspeed, 20, 'IAS', C.mint); }
+      if (tp.k === 'alt') { tape(tp.x * (R.W / 320) + ox, tp.y * scaleY + oy, tp.h, d.altitude, 200, 'ALT', C.mint); }
     }
     for (var s = 0; s < (panel.strips || []).length; s++) {
       var strip = panel.strips[s];
-      var sx = strip.x * (R.W / 320), sy = strip.y * scaleY;
+      var sx = strip.x * (R.W / 320) + ox, sy = strip.y * scaleY + oy;
       if (strip.k === 'fuel' && ac.fuelKg) {
         var frac = M.clamp(d.fuel / ac.fuelKg, 0, 1);
         R.frame(sx, sy, strip.w, 6, C.bezel);
@@ -260,21 +283,18 @@
   };
 
   // Canopy frame, glare and reflections. Palette tricks only, no blending.
-  I.drawCanopy = function (ac, rig, d) {
+  I.drawCanopy = function (ac, rig, d, panOff) {
     if (!ac.panel || ac.panel.cutTop === undefined) { return; }
-    var top = 0;
     var frameIdx = C.dark;
+    // The window posts used to be drawn here as two vertical lines slid by
+    // the head look. They are geometry now, in the cockpit interior mesh, so
+    // they occlude the world properly and move at their own distance. What is
+    // left is the screen edge and the glare on the glass.
     R.rect(0, 0, R.W, 3, frameIdx);
     R.rect(0, 0, 3, R.H, frameIdx);
     R.rect(R.W - 3, 0, 3, R.H, frameIdx);
     if (ac.panel.illegible) { return; }
-    // Two canopy bows, offset by the head look so they behave like glass in
-    // front of the eye rather than a sticker on the screen.
-    var off = Math.round(-rig.look.yaw * 40);
-    R.vline(Math.round(R.W * 0.22) + off, top, ac.panel.cutTop - 6, frameIdx);
-    R.vline(Math.round(R.W * 0.22) + off + 1, top, ac.panel.cutTop - 6, C.bezel);
-    R.vline(Math.round(R.W * 0.78) + off, top, ac.panel.cutTop - 6, frameIdx);
-    R.vline(Math.round(R.W * 0.78) + off - 1, top, ac.panel.cutTop - 6, C.bezel);
+    var off = Math.round(panOff ? panOff.x * 0.5 : 0);
     // Glare on the upper glass. It brightens whatever is actually behind it,
     // pixel by pixel. The old version sampled one pixel at the left edge of
     // the screen, which by then was the canopy frame, so the glare was a

@@ -1,4 +1,4 @@
-// AERODROME :: src/00-core.js :: v1.5.1
+// AERODROME :: src/00-core.js :: v1.11.0
 // Namespace, math, quaternions, seeded noise. Loaded first, depends on nothing.
 // GPL-3.0
 (function (root) {
@@ -7,7 +7,7 @@
   var AERO = root.AERO = root.AERO || {};
 
   AERO.NAME = 'AERODROME';
-  AERO.VERSION = '1.5.1';
+  AERO.VERSION = '1.11.0';
   AERO.SCHEMA_VERSION = 1;
   AERO.BUILD = 0; // set by storage on load, displayed next to the version
 
@@ -188,18 +188,25 @@
   };
 
   // Deterministic value noise, used by terrain and turbulence. No tables to load.
+  // The hash lives outside the noise function on purpose. It used to be a
+  // closure created on every call, and terrain sampling calls this millions
+  // of times a second once the ground is dense.
+  function hash2(ix, iy, seed) {
+    var n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 2246822519);
+    n = (n ^ (n >>> 13)) >>> 0;
+    n = Math.imul(n, 1274126177) >>> 0;
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+
   AERO.noise2 = function (x, y, seed) {
     seed = seed || 0;
-    function h(ix, iy) {
-      var n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 2246822519);
-      n = (n ^ (n >>> 13)) >>> 0;
-      n = Math.imul(n, 1274126177) >>> 0;
-      return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
-    }
     var x0 = Math.floor(x), y0 = Math.floor(y);
-    var fx = M.smoothstep(x - x0), fy = M.smoothstep(y - y0);
-    var a = h(x0, y0), b = h(x0 + 1, y0), c = h(x0, y0 + 1), d = h(x0 + 1, y0 + 1);
-    return M.lerp(M.lerp(a, b, fx), M.lerp(c, d, fx), fy) * 2 - 1;
+    var dx = x - x0, dy = y - y0;
+    var fx = dx * dx * (3 - 2 * dx), fy = dy * dy * (3 - 2 * dy);
+    var a = hash2(x0, y0, seed), b = hash2(x0 + 1, y0, seed);
+    var c = hash2(x0, y0 + 1, seed), d = hash2(x0 + 1, y0 + 1, seed);
+    var top = a + (b - a) * fx, bot = c + (d - c) * fx;
+    return (top + (bot - top) * fy) * 2 - 1;
   };
 
   AERO.fbm2 = function (x, y, octaves, seed) {
@@ -211,6 +218,25 @@
       freq *= 2.03;
     }
     return sum / norm;
+  };
+
+  // Terrain height is asked for over and over with the same coordinates: four
+  // corners a tile, shared with the neighbouring tiles, then again by the
+  // physics and the camera. A small direct mapped cache pays for itself many
+  // times over and costs one array of each type.
+  AERO.memo2 = function (fn, bits) {
+    bits = bits || 12;
+    var size = 1 << bits, mask = size - 1;
+    var kx = new Float64Array(size), ky = new Float64Array(size);
+    var val = new Float64Array(size), used = new Uint8Array(size);
+    return function (x, y) {
+      var h = (Math.imul(x * 8 | 0, 374761393) ^ Math.imul(y * 8 | 0, 668265263)) >>> 0;
+      var i = h & mask;
+      if (used[i] && kx[i] === x && ky[i] === y) { return val[i]; }
+      var v = fn(x, y);
+      kx[i] = x; ky[i] = y; val[i] = v; used[i] = 1;
+      return v;
+    };
   };
 
   // ------------------------------------------------------------- atmosphere

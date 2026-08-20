@@ -1,4 +1,4 @@
-// AERODROME :: src/12-storage.js :: v1.5.1
+// AERODROME :: src/12-storage.js :: v1.11.0
 // Local first storage. One JSON file in, one JSON file out, schema versioned,
 // validated on import and never evaluated.
 // Depends on 00-core.js, 06-aircraft.js, 11-input.js.
@@ -49,6 +49,9 @@
         camera: { dist: 16, up: 4, lag: 3.2, lead: 0.9, damping: 1.35, bankMix: 0.35 }
       },
       bindings: IN ? IN.defaultBindings() : {},
+      // Axis dead zones, curves and inversions, and which pad to listen to.
+      axisProfiles: IN ? IN.defaultProfiles() : {},
+      padIndex: null,
       tuning: {},
       userAircraft: [],
       logs: [],
@@ -132,6 +135,15 @@
       });
       out.bindings = fresh;
     }
+
+    out.axisProfiles = IN ? IN.defaultProfiles() : {};
+    if (input.axisProfiles && typeof input.axisProfiles === 'object' && IN) {
+      var saved = IN.exportProfiles();
+      out.axisProfiles = IN.importProfiles(input.axisProfiles);
+      IN.importProfiles(saved);
+    }
+    out.padIndex = (typeof input.padIndex === 'number' && isFinite(input.padIndex))
+      ? Math.max(0, Math.min(31, input.padIndex | 0)) : null;
 
     out.tuning = {};
     if (input.tuning && typeof input.tuning === 'object') {

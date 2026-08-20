@@ -1,6 +1,6 @@
 # AERODROME
 
-<!-- AERODROME :: README.md :: v1.5.1 -->
+<!-- AERODROME :: README.md :: v1.11.0 -->
 
 A browser flight simulator that renders as if it were running on a Sega Genesis.
 Software rasterizer, 320 by 224 framebuffer, 64 colors on screen drawn from a
@@ -13,7 +13,7 @@ jet, a sailplane, a hot air balloon, a blimp, a flying saucer, a helicopter,
 an autogyro, an ornithopter, a paper airplane and a lifting body rocket all run
 through the same integrator. What differs between them is data.
 
-Version 1.5.1. License GPL-3.0.
+Version 1.11.0. License GPL-3.0.
 
 New in 1.1, the Airmanship milestone: ground effect, propeller slipstream over
 the tail, steerable wheels and differential braking, a surface wind gradient, a
@@ -36,6 +36,25 @@ that frames the aircraft instead of staring past it.
 
 1.4.1 is a cleanup and interface pass: the key legend, the quickbar and the
 tuning drawer are all built from the aircraft you are actually flying.
+
+1.11.0 is the input pass: gamepad rebinding that listens for the gamepad,
+dead zones, response curves, inversion, several pads, and conflict reporting.
+
+1.10.0 makes the cockpit real geometry, so you can look around it.
+
+1.9.0 is the light and the air: hillsides that fall into shadow when the sun
+goes behind the ridge, cloud shadows drifting on the wind, glare around the
+sun, glint on the water, and haze that thickens in the low ground.
+
+1.8.0 puts things in the valley worth flying over: barns, silos, a church, a
+water tower, a radio mast, power lines, fences, six new sprites, and woodland
+that clusters into woods instead of confetti.
+
+1.7.0 gives the valley drainage, farmland, shorelines and stone on the steep
+ground, which is Phase B of the same plan.
+
+1.6.0 gives the renderer a depth buffer, which is the first phase of
+`docs/GRAPHICS-PLAN.md` and the end of a whole class of bug.
 
 1.5.0 puts the whole flight deck on one screen and adds a fullscreen cockpit.
 
@@ -149,8 +168,17 @@ simulator can do:
 
 ## Controls
 
-Every action below is remappable in the Controls drawer. The map is saved
-locally and travels inside the export file.
+Every action below is remappable in the Controls drawer, to a key or to the
+gamepad. Press Key or Pad and then press what you want; Escape cancels. The
+map is saved locally and travels inside the export file, and if two actions
+end up on the same control the drawer says so rather than letting you find out
+in the air.
+
+Analogue axes have a dead zone, a response curve and an inversion, set per
+axis. The dead zone is how far the stick moves before the aeroplane does, the
+curve softens the middle of the travel without touching either end, and both
+apply to the gamepad only, since a key is already either pressed or not. If
+several pads are plugged in, the drawer lists them and you pick.
 
 | Action | Default |
 | --- | --- |
@@ -206,6 +234,19 @@ standing on it harder past that point buys you nothing except a nose over.
 
 ## The world
 
+The ground is made of what it is doing. Slope decides stone: shallow ground is
+grass, steep is scree, steepest is rock. The waterline decides sand. A field
+grid at an angle to the terrain grid decides farmland, with hedgerows on the
+boundaries and a crop chosen per field, so the country around the town reads
+as country.
+
+The landform has drainage. Fractal noise on its own has none, which is why it
+reads as lumps: water has nowhere to go. One flow accumulation pass at build
+time routes every cell downhill into its lowest neighbour, and where a lot of
+water passes, the ground is lower. Gullies join, because that is what flow
+does. It is computed once, cached in a grid, and sampled bilinearly, so it
+costs the flight model nothing.
+
 The valley is a data file. `docs/world-format.md` describes it, the Data drawer
 exports and imports it, and a loaded world is saved with your settings. Every
 field is range checked on the way in: unknown structure types are dropped, out
@@ -243,6 +284,37 @@ Saved airframes can be archived or deleted. Delete is a soft delete: the record
 stays in the file with a timestamp and can be restored. Nothing is destroyed
 except by the explicit Clear all local data button.
 
+## Depth
+
+The renderer keeps an inverse depth buffer, one float per pixel, cleared to
+zero every frame. Reciprocal depth is linear in screen space, so a scanline
+interpolates it between the two edge crossings and each pixel is a compare and
+a store. Sprites test against a single depth taken at their anchor.
+
+It is not what the hardware did, and it is not visible in a frame. What is
+visible is everything it fixed: trees that stood in front of the hills they
+were on, sprites painted across the aircraft, polygons swapping as you flew
+past. Measured, the depth path costs nothing against the old one, and retiring
+the build time subdivision that existed to hide sorting errors halved the face
+count near the field.
+
+## Light
+
+The valley has a skyline map. At build time, every cell of the coarse terrain
+grid records how high the horizon stands in each of eight directions, and a
+hillside is in shadow when the sun is lower than its own horizon. That is why
+the east side of the ridge goes dark in the evening while the top is still
+lit, instead of the whole valley simply dimming together.
+
+Over the top of that, a field of cloud shade drifts with the wind, the water
+glints where it would reflect the sun toward you, the sky brightens into a
+dithered halo around the sun, and haze thickens in the low ground so the
+valley floor washes out before the ridge line does.
+
+None of it costs anything at runtime worth measuring: the skyline is eight
+bytes a cell computed once over an array, and everything else is arithmetic on
+a tile that was being drawn anyway.
+
 ## Looking at the picture
 
 `tools/screenshot.js` renders a scene headless and writes a PPM, with no
@@ -261,7 +333,7 @@ at a frame.
 ## Self test
 
 The Diagnostics drawer has a self test button, and `tests.html` runs the same
-suite. As of v1.5.1 it is 150 assertions, all passing, covering:
+suite. As of v1.11.0 it is 228 assertions, all passing, covering:
 
 * the palette stays inside the 512 color space and never exceeds 64 entries
 * index 0 of each bank is the transparency slot
@@ -322,6 +394,41 @@ suite. As of v1.5.1 it is 150 assertions, all passing, covering:
   fits the box it was given, and it is the largest scale that does
 * fill mode stays inside the box, does not distort the picture, and is never
   smaller than whole pixel mode
+* the nearer polygon wins the pixel, and the frame is identical whichever
+  order the faces were submitted in
+* a sprite behind a wall draws nothing and a sprite in front of one draws
+* a marking lifted in depth survives the surface it is painted on
+* every land material exists and names a real ramp, and no two world palette
+  entries are the same color
+* the river bed is water, the bank is sand, and steep ground shows stone
+* there are fields around the town and none out on the ridge
+* erosion never raises the ground, cuts deeper where water collects, and
+  leaves the runway flat and the ridge high
+* every structure type builds, every scattered sprite names a cell that
+  exists, and nothing grows in the river or on the runway
+* the scatter is clustered rather than sprinkled, measured against what pure
+  chance would give
+* the cattle are in their fields
+* the lee of the ridge falls into shadow before the top does, and after sunset
+  nothing is lit
+* cloud shade stays in range, varies across the ground, drifts with the wind
+  and is the same field every time it is asked
+* the low ground hazes out before the high ground does
+* glare brightens the sky around the sun without leaving the sky ramp
+* every aircraft has an interior and none of it is inside the pilot, an open
+  cockpit has nothing over your head and a closed one has a roof
+* the cockpit hides part of the world behind it
+* an edge on sliver at arm reach is not drawn, but thin geometry further out
+  still is
+* the panel covers the bottom of the screen, and still covers it when head
+  look slides it
+* rest maps to exactly zero and full deflection to exactly one, the response
+  curve is monotone at every setting, and inversion flips the sign and nothing
+  else
+* stick response survives a save and load, and absurd values are clamped
+* a pad binding survives a save and load, direction and all
+* the stock map has no conflicts in it, and two actions on one control are
+  reported
 
 ## Known limitations
 
@@ -340,13 +447,12 @@ suite. As of v1.5.1 it is 150 assertions, all passing, covering:
   hue.** The palette darkens by shifting levels rather than by multiplying, so
   hues never invert, but a colour that is already dim has nowhere left to go
   and can go grey at dusk. That is the hardware, not a bug.
-* **Sorting is painter order, weighted toward the nearest vertex.** Genuinely
-  intersecting polygons still cannot be resolved, because painter order sorts
-  whole faces. Splitting the large static geometry at build time makes this
-  rare rather than impossible.
-* **Subdivided geometry is only used inside 700 metres.** Past that the plain
-  mesh is drawn, since the sorting errors are not visible and the faces are not
-  worth the transform cost.
+* **The instrument panel is still screen space, on purpose.** The structure
+  around it, coaming, posts, roof, sills and the bulkhead behind you, is real
+  geometry in the depth pass. The panel itself is a flat plane about a metre
+  in front of the eye, and under a small head rotation such a plane simply
+  slides across the view, so sliding it is both the cheap answer and the
+  correct one. Instruments are read, not inhabited.
 * **Ground effect is the classic empirical factor**, not a panel method. It is
   right in shape and about right in magnitude, which is what matters for the
   flare.

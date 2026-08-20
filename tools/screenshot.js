@@ -1,4 +1,4 @@
-// AERODROME :: tools/screenshot.js :: v1.4.2
+// AERODROME :: tools/screenshot.js :: v1.9.0
 // Renders a named scene headless and writes a PPM. Development tool only:
 // nothing in src/ depends on it and the simulator never loads it. It exists
 // because the graphics bugs fixed in v1.4.2 were all invisible in the numbers
@@ -50,7 +50,12 @@ var SCENES = {
   town: { ac: 'jet', hour: 15, mode: 'chase', pos: [1150, 320, 200], vel: [0, 0, 180] },
   dusk: { ac: 'saucer', hour: 19.6, mode: 'chase', pos: [-200, 700, -300], vel: [0, 0, 6] },
   night: { ac: 'trainer', hour: 22.5, mode: 'chase', pos: [0, 340, -600], vel: [0, 2, 50] },
-  tower: { ac: 'warbird', hour: 11, mode: 'tower', pos: [180, 220, -300], vel: [0, 0, 90] }
+  tower: { ac: 'warbird', hour: 11, mode: 'tower', pos: [180, 220, -300], vel: [0, 0, 90] },
+  village: { ac: 'trainer', hour: 10, mode: 'chase', pos: [1100, 150, 100], vel: [0, 0, 42] },
+  farm: { ac: 'trainer', hour: 15, mode: 'chase', pos: [620, 120, -420], vel: [0, 0, 42] },
+  wires: { ac: 'trainer', hour: 12, mode: 'chase', pos: [300, 90, -1150], vel: [0, 0, 40] },
+  evening: { ac: 'trainer', hour: 17.6, mode: 'chase', pos: [-600, 240, -400], vel: [0, 0, 44] },
+  intosun: { ac: 'trainer', hour: 8.2, mode: 'cockpit', pos: [400, 300, -600], vel: [0, 0, 44] }
 };
 
 function render(name) {
@@ -79,11 +84,11 @@ function render(name) {
 
   var cam = rig.cam;
   R.clear(P.RAMP.sky.start);
+  R.clearDepth();
   G.drawSkyPlane(cam, env);
   G.drawStars(cam, env);
   G.drawSun(cam, env);
   G.drawClouds(cam, env, 12);
-  G.drawGroundGrid(cam, 400, 9000);
   G.resetQueue();
   W.emit(cam, env, 12, 0);
   G.submitMesh(cam, ac.mesh, st.pos, st.quat, { light: env.sunDir, ambient: env.ambient });
@@ -94,12 +99,14 @@ function render(name) {
   G.flushQueue();
   W.emitSprites(cam, env, 12, 0);
   var opts = { gear: 1, flap: 0, brake: 0, spoiler: 0, burner: 0 };
+  R.depthEnabled = false;
   if (rig.mode === 'cockpit') {
     I.drawPanel(ac, st.derived, 12, opts);
     I.drawCanopy(ac, rig, st.derived);
   } else {
     I.drawHUD(ac, st.derived, opts);
   }
+  R.depthEnabled = true;
   return R;
 }
 

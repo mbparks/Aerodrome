@@ -1,4 +1,4 @@
-// AERODROME :: src/01-palette.js :: v1.4.2
+// AERODROME :: src/01-palette.js :: v1.7.0
 // 9-bit color, four palettes of sixteen, ordered dither. Depends on 00-core.js.
 // GPL-3.0
 (function (root) {
@@ -24,12 +24,18 @@
 
   // Ramps inside the banks. start is a global index, len is entry count.
   P.RAMP = {
-    grass: { start: 1, len: 6 },
-    rock: { start: 7, len: 3 },
-    water: { start: 10, len: 2 },
-    tarmac: { start: 12, len: 2 },
-    mark: { start: 14, len: 1 },
-    shadow: { start: 15, len: 1 },
+    // The world bank, re-budgeted in v1.7.0. Grass lost an entry that was a
+    // duplicate after nine bit quantization, and the shadow now shares the
+    // darkest grass rather than owning a slot of its own. That paid for sand
+    // and crop, which is what a valley with a river and fields in it needs.
+    grass: { start: 1, len: 5 },
+    rock: { start: 6, len: 3 },
+    water: { start: 9, len: 2 },
+    tarmac: { start: 11, len: 2 },
+    mark: { start: 13, len: 1 },
+    sand: { start: 14, len: 1 },
+    crop: { start: 15, len: 1 },
+    shadow: { start: 1, len: 1 },
     sky: { start: 17, len: 8 },
     cloud: { start: 25, len: 3 },
     sun: { start: 28, len: 3 },
@@ -162,12 +168,15 @@
   var STOCK = {
     world: [
       [0, 0, 0],        // 0 backdrop and transparency
-      [18, 40, 18], [30, 62, 26], [46, 88, 34], [62, 112, 44], [86, 140, 56], [116, 168, 74],
-      [70, 62, 52], [104, 94, 78], [140, 130, 112],
-      [24, 52, 94], [46, 88, 140],
-      [46, 46, 50], [76, 76, 80],
-      [216, 216, 208],
-      [12, 18, 14]
+      // 1 to 5, grass. Five rather than six: the old second and third entries
+      // landed on the same nine bit color, so one of them was decoration.
+      [18, 40, 18], [46, 88, 34], [62, 112, 44], [86, 140, 56], [116, 168, 74],
+      [70, 62, 52], [104, 94, 78], [140, 130, 112],   // 6 to 8, rock and scree
+      [24, 52, 94], [46, 88, 140],                    // 9 to 10, water
+      [46, 46, 50], [76, 76, 80],                     // 11 to 12, tarmac
+      [216, 216, 208],                                // 13, runway markings
+      [196, 178, 128],                                // 14, sand and shoreline
+      [186, 162, 62]                                  // 15, ripe crop
     ],
     sky: [
       [0, 0, 0],

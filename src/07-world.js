@@ -1,4 +1,4 @@
-// AERODROME :: src/07-world.js :: v1.4.2
+// AERODROME :: src/07-world.js :: v1.9.0
 // One valley, one airfield, one river, one town. Hand authored on purpose.
 // Depends on 00-core.js, 03-render.js, 06-aircraft.js.
 // GPL-3.0
@@ -38,7 +38,17 @@
       { type: 'sock', x: 40, z: 60 },
       { type: 'bridge', z: 400 },
       { type: 'ring', x: -1080, z: -260, radius: 34, tiltDeg: 28 },
-      { type: 'ring', x: -980, z: -420, radius: 26, tiltDeg: 75 }
+      { type: 'ring', x: -980, z: -420, radius: 26, tiltDeg: 75 },
+      { type: 'barn', x: 620, z: -180, rotDeg: 20 },
+      { type: 'barn', x: 1520, z: 900, rotDeg: -35 },
+      { type: 'silo', x: 648, z: -206 },
+      { type: 'silo', x: 664, z: -212 },
+      { type: 'watertower', x: 1010, z: 300 },
+      { type: 'church', x: 1180, z: 470, rotDeg: 12 },
+      { type: 'mast', x: -420, z: 980, height: 52 },
+      { type: 'powerline', x: 300, z: -900, rotDeg: 78, count: 12, span: 95 },
+      { type: 'fence', x: 250, z: -140, rotDeg: 0, length: 320 },
+      { type: 'fence', x: 250, z: -140, rotDeg: 90, length: 260 }
     ],
     views: [
       { name: 'TOWER', x: -70, z: 120, height: 17 },
@@ -105,8 +115,151 @@
     return Math.abs(x) < f.halfX && Math.abs(z) < f.halfZ;
   };
 
+  // ---------------------------------------------------------- drainage
+  // Fractal noise has no drainage, which is why it reads as lumps rather than
+  // as land. One flow accumulation pass at build time routes water downhill,
+  // and where a lot of water passes, the ground is lower. Gullies join,
+  // because that is what flow does. Built once, sampled bilinearly.
+  W.EROSION = { n: 128, span: 10000, depth: 26, grid: null };
+
+  W.buildErosion = function () {
+    var e = W.EROSION, n = e.n, cell = e.span / n;
+    var base = new Float32Array(n * n);
+    var flow = new Float32Array(n * n);
+    var order = new Int32Array(n * n);
+    var i, j, k;
+    for (j = 0; j < n; j++) {
+      for (i = 0; i < n; i++) {
+        var wx = (i - n / 2) * cell, wz = (j - n / 2) * cell;
+        base[j * n + i] = baseHeight(wx, wz);
+        flow[j * n + i] = 1;
+        order[j * n + i] = j * n + i;
+      }
+    }
+    // Highest first, so every cell is handed its own catchment before it
+    // passes it on.
+    var idx = Array.prototype.slice.call(order);
+    idx.sort(function (a, b) { return base[b] - base[a]; });
+    for (k = 0; k < idx.length; k++) {
+      var c = idx[k];
+      var ci = c % n, cj = (c / n) | 0;
+      var lowest = -1, lowestH = base[c];
+      for (var dj = -1; dj <= 1; dj++) {
+        for (var di = -1; di <= 1; di++) {
+          if (!di && !dj) { continue; }
+          var ni = ci + di, nj = cj + dj;
+          if (ni < 0 || nj < 0 || ni >= n || nj >= n) { continue; }
+          var nc = nj * n + ni;
+          if (base[nc] < lowestH) { lowestH = base[nc]; lowest = nc; }
+        }
+      }
+      if (lowest >= 0) { flow[lowest] += flow[c]; }
+    }
+    var carve = new Float32Array(n * n);
+    for (k = 0; k < carve.length; k++) {
+      // Diminishing returns: a stream cuts, a river does not cut ten times as
+      // deep for ten times the water.
+      carve[k] = e.depth * (1 - 1 / (1 + Math.pow(flow[k] * 0.06, 0.55)));
+    }
+    e.grid = carve;
+    // The coarse surface, after carving. The horizon map is built from this
+    // rather than from heightAt, because a ray march over an array is three
+    // orders of magnitude cheaper than one over a noise field.
+    var surf = new Float32Array(n * n);
+    for (k = 0; k < surf.length; k++) { surf[k] = base[k] - carve[k]; }
+    e.surface = surf;
+    return carve;
+  };
+
+  // ---------------------------------------------------------- terrain shade
+  // How high the skyline stands in each of eight directions, from every cell.
+  // A hillside is in shadow when the sun is lower than its own horizon, which
+  // is what makes a valley fill with shade in the evening instead of staying
+  // evenly lit until the light simply goes out.
+  W.HORIZON = { dirs: 8, grid: null };
+
+  W.buildHorizon = function () {
+    var e = W.EROSION, n = e.n, cell = e.span / n;
+    var surf = e.surface;
+    if (!surf) { return null; }
+    var dirs = W.HORIZON.dirs;
+    var out = new Uint8Array(n * n * dirs);
+    var steps = 26;
+    for (var d = 0; d < dirs; d++) {
+      var a = d / dirs * Math.PI * 2;
+      var dx = Math.sin(a), dz = Math.cos(a);
+      for (var j = 0; j < n; j++) {
+        for (var i = 0; i < n; i++) {
+          var h0 = surf[j * n + i];
+          var best = 0;
+          for (var st = 1; st <= steps; st++) {
+            var r = st * st * 0.5 + st;          // finer near, coarser far
+            var si = Math.round(i + dx * r), sj = Math.round(j + dz * r);
+            if (si < 0 || sj < 0 || si >= n || sj >= n) { break; }
+            var dh = surf[sj * n + si] - h0;
+            if (dh <= 0) { continue; }
+            var ang = Math.atan2(dh, r * cell);
+            if (ang > best) { best = ang; }
+          }
+          // Stored in half degrees, which is finer than the light is.
+          out[(j * n + i) * dirs + d] = Math.min(255, Math.round(M.deg(best) * 2));
+        }
+      }
+    }
+    W.HORIZON.grid = out;
+    return out;
+  };
+
+  // Sun elevation and azimuth against the local skyline. Returns 1 in full
+  // light and 0 in shadow, with a soft edge because a skyline is not a knife.
+  W.sunlightAt = function (x, z, sunDir) {
+    var hg = W.HORIZON.grid;
+    if (!hg || !sunDir) { return 1; }
+    var e = W.EROSION, n = e.n, cell = e.span / n, dirs = W.HORIZON.dirs;
+    var fx = x / cell + n / 2, fz = z / cell + n / 2;
+    if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) { return 1; }
+    var i = fx | 0, j = fz | 0;
+    // sunDir points from the sun toward the ground, so the sun is behind it.
+    var toSun = { x: -sunDir.x, y: -sunDir.y, z: -sunDir.z };
+    var flat = Math.sqrt(toSun.x * toSun.x + toSun.z * toSun.z);
+    var elev = M.deg(Math.atan2(toSun.y, flat > 1e-6 ? flat : 1e-6));
+    if (elev <= 0) { return 0; }
+    var az = Math.atan2(toSun.x, toSun.z);
+    if (az < 0) { az += Math.PI * 2; }
+    var slot = az / (Math.PI * 2) * dirs;
+    var s0 = Math.floor(slot) % dirs, s1 = (s0 + 1) % dirs, t = slot - Math.floor(slot);
+    var base = (j * n + i) * dirs;
+    var hz = (hg[base + s0] * (1 - t) + hg[base + s1] * t) / 2;
+    // One degree of softness at the terminator.
+    return M.clamp((elev - hz) / 1.0 + 0.5, 0, 1);
+  };
+
+  // Cloud shadows. A field of shade drifting with the wind, which is what
+  // makes an aerial view read as weather rather than as a diagram.
+  W.cloudShadowAt = function (x, z, t, wind) {
+    var dx = wind ? wind.x * t * 0.6 : 0;
+    var dz = wind ? wind.z * t * 0.6 : 0;
+    var v = AERO.fbm2((x - dx) / 520, (z - dz) / 520, 2, 77);
+    return M.clamp((v + 0.15) * 2.4, 0, 1);   // 1 in full sun, 0 under a cloud
+  };
+
+  function carveAt(x, z) {
+    var e = W.EROSION;
+    if (!e.grid) { return 0; }
+    var n = e.n, cell = e.span / n;
+    var fx = x / cell + n / 2, fz = z / cell + n / 2;
+    if (fx < 0 || fz < 0 || fx > n - 1.001 || fz > n - 1.001) { return 0; }
+    var i = fx | 0, j = fz | 0, tx = fx - i, tz = fz - j;
+    var g = e.grid;
+    var a = g[j * n + i], b = g[j * n + i + 1];
+    var c = g[(j + 1) * n + i], d = g[(j + 1) * n + i + 1];
+    return (a + (b - a) * tx) * (1 - tz) + (c + (d - c) * tx) * tz;
+  }
+
+  W.carveAt = carveAt;
+
   W.heightAt = function (x, z) {
-    var h = baseHeight(x, z);
+    var h = baseHeight(x, z) - carveAt(x, z);
     // River channel, carved after the landform.
     var tp = W.params.terrain, fp = W.params.field;
     var rx = W.riverX(z);
@@ -130,13 +283,48 @@
     return V.norm({ x: (hL - hR) / (2 * e), y: 1, z: (hD - hU) / (2 * e) });
   };
 
+  // Farmland. A grid at an angle to the terrain grid, near the town, with a
+  // per field crop chosen from the cell index. Fields are the most
+  // recognisable thing there is under a light aircraft.
+  W.FIELD = { size: 130, angleRad: 0.38, radius: 900 };
+
+  W.fieldAt = function (x, z) {
+    var f = W.FIELD, t = W.params.town;
+    var dx = x - t.x, dz = z - t.z;
+    if (dx * dx + dz * dz > f.radius * f.radius) { return null; }
+    var c = Math.cos(f.angleRad), sn = Math.sin(f.angleRad);
+    var u = (dx * c + dz * sn) / f.size;
+    var v = (-dx * sn + dz * c) / f.size;
+    var cu = Math.floor(u), cv = Math.floor(v);
+    // Hedgerows are the field boundaries, a few metres either side of a line.
+    var eu = Math.abs(u - cu - 0.5), ev = Math.abs(v - cv - 0.5);
+    var edge = Math.max(eu, ev) > 0.46;
+    var kind = (((cu * 73856093) ^ (cv * 19349663)) >>> 0) % 5;
+    return { cu: cu, cv: cv, edge: edge, kind: kind };
+  };
+
+  // Material by what the ground is doing, rather than by height alone: slope
+  // for rock and scree, the waterline for sand, the field grid for farmland.
   W.materialAt = function (x, z, h) {
     if (W.inRunway(x, z)) { return 'tarmac'; }
     var rx = W.riverX(z);
-    if (Math.abs(x - rx) < 62) { return 'water'; }
-    if (h > W.FLOOR + 250) { return 'rock'; }
+    var dr = Math.abs(x - rx);
+    if (dr < 62) { return 'water'; }
+    if (dr < 82) { return 'sand'; }
     var n = W.normalAt(x, z);
-    if (n.y < 0.82) { return 'rock'; }
+    // Grass climbs a long way up a hillside in real country. Only the steep
+    // ground is bare, and only the steepest is stone.
+    if (n.y < 0.58) { return 'rock'; }
+    if (n.y < 0.72) { return 'scree'; }
+    if (h > W.FLOOR + 320 && n.y < 0.9) { return 'scree'; }
+    var f = W.fieldAt(x, z);
+    if (f) {
+      if (f.edge) { return 'hedge'; }
+      if (f.kind === 0) { return 'crop'; }
+      if (f.kind === 1) { return 'plough'; }
+      if (f.kind === 2) { return 'meadow'; }
+    }
+    if (h < W.FLOOR + 30 && n.y > 0.96) { return 'meadow'; }
     return 'grass';
   };
 
@@ -251,6 +439,127 @@
   };
 
   W.objects = [];
+  // ------------------------------------------------------- more structures
+  // A valley with one hangar and a tower in it is an airfield with nothing
+  // around it. These are the things that make it somewhere.
+
+  function barn(x, z, rotY) {
+    var faces = [].concat(
+      mk.box(0, 3.4, 0, 9, 3.4, 6, 'accent'),
+      // A pitched roof, two slabs meeting at a ridge.
+      [{ mat: 'rock', v: [[-9, 6.8, -6], [9, 6.8, -6], [9, 9.4, 0], [-9, 9.4, 0]] },
+        { mat: 'rock', v: [[-9, 9.4, 0], [9, 9.4, 0], [9, 6.8, 6], [-9, 6.8, 6]] }],
+      mk.box(9.1, 2.4, 0, 0.2, 2.4, 2.4, 'dark')
+    );
+    return { mesh: { faces: faces }, pos: V.make(x, W.heightAt(x, z), z),
+      quat: Q.fromEuler(rotY || 0, 0, 0), r: 14 };
+  }
+
+  function silo(x, z) {
+    var faces = [].concat(
+      mk.lathe([[0, 2.6], [11, 2.6], [13.4, 2.0], [14.6, 0]], 10, 'white'),
+      mk.box(0, 0.4, 0, 3.2, 0.4, 3.2, 'rock')
+    );
+    return { mesh: { faces: faces }, pos: V.make(x, W.heightAt(x, z), z),
+      quat: Q.identity(), r: 6 };
+  }
+
+  function watertower(x, z) {
+    var faces = [].concat(
+      mk.lathe([[13, 4.4], [17, 5.0], [20, 4.2], [21.5, 0]], 10, 'hull'),
+      mk.box(-2.6, 6.5, -2.6, 0.5, 6.5, 0.5, 'rock'),
+      mk.box(2.6, 6.5, -2.6, 0.5, 6.5, 0.5, 'rock'),
+      mk.box(-2.6, 6.5, 2.6, 0.5, 6.5, 0.5, 'rock'),
+      mk.box(2.6, 6.5, 2.6, 0.5, 6.5, 0.5, 'rock')
+    );
+    return { mesh: { faces: faces }, pos: V.make(x, W.heightAt(x, z), z),
+      quat: Q.identity(), r: 8 };
+  }
+
+  function church(x, z, rotY) {
+    var faces = [].concat(
+      mk.box(0, 3.6, 0, 5, 3.6, 11, 'white'),
+      [{ mat: 'rock', v: [[-5, 7.2, -11], [5, 7.2, -11], [5, 9.6, 0], [-5, 9.6, 0]] },
+        { mat: 'rock', v: [[-5, 9.6, 0], [5, 9.6, 0], [5, 7.2, 11], [-5, 7.2, 11]] }],
+      mk.box(0, 8, -9, 3, 8, 3, 'white'),
+      // The spire, which is the point of a church from the air.
+      mk.lathe([[16, 3.0], [19, 2.4], [27, 0]], 6, 'rock', 0)
+    );
+    // The spire is built about the origin, so lift it onto the tower.
+    for (var i = faces.length - 6; i < faces.length; i++) {
+      if (!faces[i]) { continue; }
+      for (var j = 0; j < faces[i].v.length; j++) { faces[i].v[j][2] -= 9; }
+    }
+    return { mesh: { faces: faces }, pos: V.make(x, W.heightAt(x, z), z),
+      quat: Q.fromEuler(rotY || 0, 0, 0), r: 14 };
+  }
+
+  function mast(x, z, height) {
+    height = height || 46;
+    var faces = [];
+    var seg = 6, step = height / seg;
+    for (var i = 0; i < seg; i++) {
+      var y0 = i * step, y1 = (i + 1) * step;
+      var w0 = 1.6 * (1 - i / seg * 0.6), w1 = 1.6 * (1 - (i + 1) / seg * 0.6);
+      faces.push({ mat: 'rock', twoSided: true, v: [[-w0, y0, 0], [w0, y0, 0], [w1, y1, 0], [-w1, y1, 0]] });
+      faces.push({ mat: 'rock', twoSided: true, v: [[0, y0, -w0], [0, y0, w0], [0, y1, w1], [0, y1, -w1]] });
+    }
+    return { mesh: { faces: faces }, pos: V.make(x, W.heightAt(x, z), z),
+      quat: Q.identity(), r: 4, beacon: true, beaconY: height };
+  }
+
+  // A run of poles with wires between them, built as one object so the wires
+  // sag between the right pairs.
+  function powerline(x, z, rotDeg, count, span) {
+    count = Math.max(2, Math.min(24, count || 8));
+    span = span || 90;
+    var faces = [], i;
+    var rot = M.rad(rotDeg || 0);
+    var dx = Math.sin(rot), dz = Math.cos(rot);
+    var base = W.heightAt(x, z);
+    for (i = 0; i < count; i++) {
+      var px = dx * span * i, pz = dz * span * i;
+      var top = W.heightAt(x + px, z + pz) - base + 13;
+      faces = faces.concat(mk.box(px, (top - 13) + 6.5, pz, 0.5, 6.5, 0.5, 'rock'));
+      faces.push({ mat: 'rock', twoSided: true, v: [
+        [px - 3.4, top - 0.9, pz], [px + 3.4, top - 0.9, pz],
+        [px + 3.4, top - 0.4, pz], [px - 3.4, top - 0.4, pz]] });
+      if (i + 1 < count) {
+        var nx = dx * span * (i + 1), nz = dz * span * (i + 1);
+        var ntop = W.heightAt(x + nx, z + nz) - base + 13;
+        for (var w = -1; w <= 1; w += 2) {
+          var off = w * 3.0;
+          var sag = 2.6;
+          var midx = (px + nx) / 2 + dz * 0, midz = (pz + nz) / 2;
+          faces.push({ mat: 'dark', twoSided: true, v: [
+            [px + dz * off, top - 0.7, pz - dx * off],
+            [midx + dz * off, (top + ntop) / 2 - sag, midz - dx * off],
+            [nx + dz * off, ntop - 0.7, nz - dx * off],
+            [midx + dz * off, (top + ntop) / 2 - sag + 0.25, midz - dx * off]] });
+        }
+      }
+    }
+    return { mesh: { faces: faces }, pos: V.make(x, base, z), quat: Q.identity(),
+      r: span * count };
+  }
+
+  function fence(x, z, rotDeg, length) {
+    length = Math.max(10, Math.min(600, length || 120));
+    var faces = [], rot = M.rad(rotDeg || 0);
+    var dx = Math.sin(rot), dz = Math.cos(rot);
+    var base = W.heightAt(x, z);
+    var n = Math.floor(length / 8);
+    for (var i = 0; i <= n; i++) {
+      var px = dx * 8 * i, pz = dz * 8 * i;
+      var h = W.heightAt(x + px, z + pz) - base;
+      faces = faces.concat(mk.box(px, h + 0.8, pz, 0.12, 0.8, 0.12, 'rock'));
+    }
+    faces.push({ mat: 'rock', twoSided: true, v: [
+      [0, 1.2, 0], [dx * 8 * n, W.heightAt(x + dx * 8 * n, z + dz * 8 * n) - base + 1.2, dz * 8 * n],
+      [dx * 8 * n, W.heightAt(x + dx * 8 * n, z + dz * 8 * n) - base + 1.05, dz * 8 * n], [0, 1.05, 0]] });
+    return { mesh: { faces: faces }, pos: V.make(x, base, z), quat: Q.identity(), r: length };
+  }
+
   // Structure types a world file may name. Anything else is dropped by the
   // validator rather than guessed at.
   var BUILDERS = {
@@ -263,12 +572,27 @@
     sock: function (d) { return windsockMast(d.x, d.z); },
     bridge: function (d) { return bridge(d.z); },
     ring: function (d) { return ring(d.x, d.z, d.radius, M.rad(d.tiltDeg || 0)); },
-    block: function (d) { return block(d.x, d.z, d.w, d.h, d.d, d.mat); }
+    block: function (d) { return block(d.x, d.z, d.w, d.h, d.d, d.mat); },
+    barn: function (d) { return barn(d.x, d.z, M.rad(d.rotDeg || 0)); },
+    silo: function (d) { return silo(d.x, d.z); },
+    watertower: function (d) { return watertower(d.x, d.z); },
+    church: function (d) { return church(d.x, d.z, M.rad(d.rotDeg || 0)); },
+    mast: function (d) { return mast(d.x, d.z, d.height); },
+    powerline: function (d) { return powerline(d.x, d.z, d.rotDeg, d.count, d.span); },
+    fence: function (d) { return fence(d.x, d.z, d.rotDeg, d.length); }
   };
   W.BUILDERS = BUILDERS;
 
   W.build = function () {
     var p = W.params;
+    // Drainage first: everything else is placed on the eroded surface, and
+    // the skyline map is built from that surface.
+    W.buildErosion();
+    W.buildHorizon();
+    // Adjacent tiles share corners, so the renderer asks for the same height
+    // four times over. The cache is rebuilt here so a new world cannot be
+    // drawn with the old ground.
+    W.heightCached = AERO.memo2(function (x, z) { return W.heightAt(x, z); }, 13);
     W.objects = [];
     for (var si = 0; si < p.structures.length; si++) {
       var spec = p.structures[si];
@@ -290,23 +614,56 @@
       b.windows = { w: w, h: h, d: d, seed: (i * 37 + 11) };
       W.objects.push(b);
     }
-    // Split the large static geometry once, here, and never again. The split
-    // mesh is kept alongside the plain one and used only up close, where
-    // sorting errors are visible and the extra faces are affordable.
-    for (var k = 0; k < W.objects.length; k++) {
-      if (W.objects[k].sock) { continue; }
-      W.objects[k].meshFine = W.subdivideMesh(W.objects[k].mesh, 14);
-    }
+    // Subdivision existed to make a sorting error smaller. The depth buffer
+    // makes the error impossible, so the split meshes are not built any more.
+    // The helpers stay: splitting a face is still useful for anything that
+    // wants per piece shading later.
+    // Scatter, placed by a density field rather than uniformly at random.
+    // Uniform placement is why the ridge used to read as confetti: real
+    // country has woods and clearings, not an even sprinkle.
     W.scatter = [];
     var sc = p.scatter;
     var rnd2 = AERO.rng(sc.seed);
-    for (var j = 0; j < sc.count; j++) {
+    var tries = 0;
+    while (W.scatter.length < sc.count && tries < sc.count * 12) {
+      tries++;
       var sx = (rnd2() - 0.5) * sc.spread, sz = (rnd2() - 0.5) * sc.spread;
       if (W.inField(sx, sz)) { continue; }
       var h2 = W.heightAt(sx, sz);
-      if (h2 > W.FLOOR + 260) { continue; }
-      if (Math.abs(sx - W.riverX(sz)) < 80) { continue; }
-      W.scatter.push({ x: sx, z: sz, y: h2, cell: rnd2() > 0.32 ? 'tree' : 'bush', flip: rnd2() > 0.5 });
+      if (Math.abs(sx - W.riverX(sz)) < 74) { continue; }
+      var mat = W.materialAt(sx, sz, h2);
+      if (mat === 'water' || mat === 'tarmac' || mat === 'crop' || mat === 'plough') { continue; }
+
+      // Woodland where the density noise is high, clearings where it is low,
+      // and a thinning tree line as the ground rises.
+      var dens = (AERO.fbm2(sx / 620, sz / 620, 3, 41) + 1) * 0.5;
+      var line = M.clamp(1 - (h2 - (W.FLOOR + 120)) / 240, 0, 1);
+      var chance = dens * dens * 1.5 * (0.35 + 0.65 * line);
+      if (mat === 'hedge') { chance = 0.9; }
+      if (rnd2() > chance) { continue; }
+
+      // What grows there depends on where there is.
+      var cell = 'tree';
+      var r = rnd2();
+      if (mat === 'scree' || mat === 'rock') { cell = r < 0.55 ? 'boulder' : 'conifer'; }
+      else if (h2 > W.FLOOR + 170) { cell = r < 0.62 ? 'conifer' : (r < 0.86 ? 'tree' : 'deadtree'); }
+      else if (mat === 'meadow') {
+        // Cattle belong in the fields near the farm, not scattered over every
+        // flat acre in the valley.
+        var nearFarm = !!W.fieldAt(sx, sz);
+        cell = (nearFarm && r < 0.28) ? 'cow' : (r < 0.55 ? 'bush' : 'tree');
+      }
+      else if (mat === 'hedge') { cell = r < 0.5 ? 'bush' : 'post'; }
+      else { cell = r < 0.58 ? 'tree' : (r < 0.82 ? 'bush' : (r < 0.94 ? 'conifer' : 'deadtree')); }
+      W.scatter.push({ x: sx, z: sz, y: h2, cell: cell, flip: rnd2() > 0.5 });
+    }
+    // Hay bales sit in the ripe fields, which is how you know they are ripe.
+    for (var hb = 0; hb < 40; hb++) {
+      var bx = W.TOWN.x + (rnd2() - 0.5) * W.FIELD.radius * 1.8;
+      var bz = W.TOWN.z + (rnd2() - 0.5) * W.FIELD.radius * 1.8;
+      var bh = W.heightAt(bx, bz);
+      if (W.materialAt(bx, bz, bh) !== 'crop') { continue; }
+      W.scatter.push({ x: bx, z: bz, y: bh, cell: 'haybale', flip: rnd2() > 0.5 });
     }
     W.birds = [];
     for (var bi = 0; bi < sc.birds; bi++) {
@@ -399,7 +756,16 @@
           clean.radius = num(spec.radius, 4, 400, 24);
           clean.tiltDeg = num(spec.tiltDeg, -180, 180, 0);
         }
-        if (spec.type === 'hangar') { clean.rotDeg = num(spec.rotDeg, -360, 360, 0); }
+        if (spec.type === 'hangar' || spec.type === 'barn' || spec.type === 'church'
+          || spec.type === 'powerline' || spec.type === 'fence') {
+          clean.rotDeg = num(spec.rotDeg, -360, 360, 0);
+        }
+        if (spec.type === 'mast') { clean.height = num(spec.height, 8, 200, 46); }
+        if (spec.type === 'powerline') {
+          clean.count = num(spec.count, 2, 24, 8) | 0;
+          clean.span = num(spec.span, 20, 300, 90);
+        }
+        if (spec.type === 'fence') { clean.length = num(spec.length, 10, 600, 120); }
         if (spec.type === 'tower') { clean.beacon = spec.beacon !== false; }
         if (spec.type === 'block') {
           clean.w = num(spec.w, 1, 400, 12);
@@ -522,8 +888,10 @@
 
   function tileMaterial(x, z, h) { return W.materialAt(x, z, h); }
 
-  W.emitTerrain = function (cam, env) {
+  W.emitTerrain = function (cam, env, t2) {
     var light = env.sunDir, amb = env.ambient;
+    var wind = env.windMean;
+    t2 = t2 || 0;
     for (var b = 0; b < BANDS.length; b++) {
       var band = BANDS[b], t = band.tile;
       var n = Math.ceil(band.radius / t);
@@ -538,22 +906,60 @@
           // Cheap cone cull. Anything well behind the camera is skipped.
           var ahead = dx * cam.fwd.x + dz * cam.fwd.z;
           if (ahead < -t * 2 && dist > t * 2) { continue; }
-          var h00 = W.heightAt(gx, gz), h10 = W.heightAt(gx + t, gz);
-          var h11 = W.heightAt(gx + t, gz + t), h01 = W.heightAt(gx, gz + t);
+          var hc0 = W.heightCached || W.heightAt;
+          var h00 = hc0(gx, gz), h10 = hc0(gx + t, gz);
+          var h11 = hc0(gx + t, gz + t), h01 = hc0(gx, gz + t);
           var hc = (h00 + h10 + h11 + h01) * 0.25;
           var mat = tileMaterial(cxp, czp, hc);
+          // Shade from the skyline and from the clouds, and haze that thickens
+          // in the low ground the way real air does.
+          var lit = W.sunlightAt(cxp, czp, light) * (0.55 + 0.45 * W.cloudShadowAt(cxp, czp, t2, wind));
+          var shade = (lit - 1) * 0.16;
+          var hazeBoost = M.clamp(1 - (hc - W.FLOOR) / 260, 0, 1) * 0.5;
           if (mat === 'water') {
             var wl = W.WATER_LEVEL;
+            // Glint. Where the water would reflect the sun into the camera,
+            // it is bright, and everywhere else it is not.
+            var glint = 0;
+            if (light && light.y < -0.02) {
+              var refx = light.x, refz = light.z;
+              var vx = cam.pos.x - cxp, vz = cam.pos.z - czp;
+              var vlen = Math.sqrt(vx * vx + vz * vz) || 1;
+              var align = (refx * vx + refz * vz) / vlen;
+              glint = M.clamp((align - 0.55) * 2.2, 0, 1);
+            }
             G.submitFace(cam, [
               { x: gx, y: wl, z: gz }, { x: gx, y: wl, z: gz + t },
               { x: gx + t, y: wl, z: gz + t }, { x: gx + t, y: wl, z: gz }
-            ], 'water', { light: light, ambient: amb * 0.9 + 0.08 });
+            ], 'water', {
+              light: light, ambient: amb * 0.9 + 0.08,
+              tint: shade * 0.5 + glint * 0.5, hazeBoost: hazeBoost
+            });
             continue;
           }
           G.submitFace(cam, [
             { x: gx, y: h00, z: gz }, { x: gx, y: h01, z: gz + t },
             { x: gx + t, y: h11, z: gz + t }, { x: gx + t, y: h10, z: gz }
-          ], mat, { light: light, ambient: amb, tint: (AERO.noise2(gx * 0.01, gz * 0.01, 3) * 0.07) });
+          ], mat, {
+            light: light, ambient: amb, hazeBoost: hazeBoost,
+            tint: (AERO.noise2(gx * 0.01, gz * 0.01, 3) * 0.07) + shade
+          });
+
+          // Skirts. Where one level of detail meets the next the two grids
+          // disagree by a metre or two, and without a skirt that disagreement
+          // is a slot of sky in the middle of a hillside. The skirt hangs
+          // down from the tile edge and is never seen unless it is needed.
+          if (b < BANDS.length - 1 && dist > band.radius - t * 1.6) {
+            var drop = t * 0.35;
+            G.submitFace(cam, [
+              { x: gx, y: h00, z: gz }, { x: gx + t, y: h10, z: gz },
+              { x: gx + t, y: h10 - drop, z: gz }, { x: gx, y: h00 - drop, z: gz }
+            ], mat, { light: light, ambient: amb * 0.9, twoSided: true });
+            G.submitFace(cam, [
+              { x: gx, y: h01, z: gz + t }, { x: gx + t, y: h11, z: gz + t },
+              { x: gx + t, y: h11 - drop, z: gz + t }, { x: gx, y: h01 - drop, z: gz + t }
+            ], mat, { light: light, ambient: amb * 0.9, twoSided: true });
+          }
         }
       }
     }
@@ -573,7 +979,7 @@
       G.submitFace(cam, [
         { x: -1.1, y: y + 0.03, z: z0 }, { x: -1.1, y: y + 0.03, z: z1 },
         { x: 1.1, y: y + 0.03, z: z1 }, { x: 1.1, y: y + 0.03, z: z0 }
-      ], 'mark', { light: light, ambient: 1, noHaze: true, bias: 1.5 });
+      ], 'mark', { light: light, ambient: 1, noHaze: true, zlift: 0.004 });
     }
     [-1, 1].forEach(function (s) {
       for (var k = -3; k <= 3; k++) {
@@ -582,7 +988,7 @@
         G.submitFace(cam, [
           { x: k * 4 - 1.4, y: y + 0.03, z: zx - 16 }, { x: k * 4 - 1.4, y: y + 0.03, z: zx + 16 },
           { x: k * 4 + 1.4, y: y + 0.03, z: zx + 16 }, { x: k * 4 + 1.4, y: y + 0.03, z: zx - 16 }
-        ], 'mark', { light: light, ambient: 1, noHaze: true, bias: 1.5 });
+        ], 'mark', { light: light, ambient: 1, noHaze: true, zlift: 0.004 });
       }
     });
   };
@@ -598,8 +1004,7 @@
         W.emitSock(cam, env, o, t);
         continue;
       }
-      var mesh = (d2 < 700 * 700 && o.meshFine) ? o.meshFine : o.mesh;
-      G.submitMesh(cam, mesh, o.pos, o.quat, { light: light, ambient: amb });
+      G.submitMesh(cam, o.mesh, o.pos, o.quat, { light: light, ambient: amb });
     }
   };
 
@@ -679,7 +1084,7 @@
     G.submitFace(cam, [
       { x: x - h, y: y, z: z - h }, { x: x - h, y: y, z: z + h },
       { x: x + h, y: y, z: z + h }, { x: x + h, y: y, z: z - h }
-    ], mat, { twoSided: true, noHaze: true, ambient: 1, bias: 2 });
+    ], mat, { twoSided: true, noHaze: true, ambient: 1, zlift: 0.01 });
   }
 
   W.emitLights = function (cam, env, t) {
@@ -748,7 +1153,7 @@
   };
 
   W.emit = function (cam, env, t, frame) {
-    W.emitTerrain(cam, env);
+    W.emitTerrain(cam, env, t);
     W.emitRunway(cam, env);
     W.emitObjects(cam, env, t);
     W.emitLights(cam, env, t);

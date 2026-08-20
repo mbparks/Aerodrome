@@ -1,4 +1,4 @@
-// AERODROME :: src/14-ui.js :: v1.5.1
+// AERODROME :: src/14-ui.js :: v1.11.0
 // The HTML chrome around the viewport. Real elements, keyboard operable, no
 // innerHTML anywhere so imported data can never become markup.
 // Depends on 00-core.js through 13-tests.js.
@@ -596,22 +596,102 @@
   // --------------------------------------------------------------- controls
   function buildControls() {
     var b = drawer('Controls');
-    b.appendChild(el('p', { class: 'hint', text: 'Every action is remappable. Press Rebind, then press the key you want. The map is saved locally and travels with the export file.' }));
+    b.appendChild(el('p', { class: 'hint', text: 'Every action is remappable to a key or to the gamepad. Press Key or Pad, then press what you want. Escape cancels. The map is saved locally and travels with the export file.' }));
     toggle(b, 'Mouse look with the right button', IN.mouseLookEnabled, function (v) { IN.mouseLookEnabled = v; });
+
+    // ------------------------------------------------------------- gamepad
+    b.appendChild(el('h3', { class: 'placard', text: 'Gamepad' }));
+    refs.padHost = el('div', {});
+    b.appendChild(refs.padHost);
+    U.buildPadPicker();
+    IN.onPadChange = function () { U.buildPadPicker(); };
+
+    // -------------------------------------------------------------- axes
+    b.appendChild(el('h3', { class: 'placard', text: 'Stick response' }));
+    b.appendChild(el('p', { class: 'hint', text: 'Dead zone is how far the stick moves before the aeroplane does. Curve softens the middle of the travel without changing either end. Both apply to the gamepad; the keyboard is already either pressed or not.' }));
+    refs.axisHost = el('div', {});
+    b.appendChild(refs.axisHost);
+    U.buildAxisRows();
+
+    b.appendChild(el('h3', { class: 'placard', text: 'Bindings' }));
+    refs.conflictHost = el('p', { class: 'hint', text: '' });
+    b.appendChild(refs.conflictHost);
     refs.mapHost = el('div', {});
     b.appendChild(refs.mapHost);
     var row = el('div', { class: 'row' });
     button(row, 'Reset all bindings', function () {
       IN.resetBindings();
-      S.state.bindings = IN.exportMap();
-      S.save();
+      app.persistInput();
       U.buildBindingTable();
       U.buildLegend();
       U.setStatus('Bindings reset');
     });
+    button(row, 'Reset stick response', function () {
+      IN.resetProfiles();
+      app.persistInput();
+      U.buildAxisRows();
+      U.setStatus('Stick response back to stock');
+    });
     b.appendChild(row);
     U.buildBindingTable();
   }
+
+  U.buildPadPicker = function () {
+    if (!refs.padHost) { return; }
+    while (refs.padHost.firstChild) { refs.padHost.removeChild(refs.padHost.firstChild); }
+    var pads = IN.pads();
+    if (!pads.length) {
+      refs.padHost.appendChild(el('p', { class: 'hint', text: 'No gamepad seen yet. Plug one in and press a button on it, since browsers do not report a pad until it is used.' }));
+      return;
+    }
+    var options = pads.map(function (p) {
+      return { value: String(p.index), label: p.id.slice(0, 42) };
+    });
+    picker(refs.padHost, 'Use this pad', options,
+      String(IN.padIndex === null ? pads[0].index : IN.padIndex),
+      function (v) {
+        IN.usePad(parseInt(v, 10));
+        app.persistInput();
+        U.setStatus('Listening to pad ' + v);
+      });
+  };
+
+  U.buildAxisRows = function () {
+    if (!refs.axisHost) { return; }
+    while (refs.axisHost.firstChild) { refs.axisHost.removeChild(refs.axisHost.firstChild); }
+    var names = { pitch: 'Pitch', roll: 'Roll', yaw: 'Rudder', throttle: 'Throttle', lookX: 'Look sideways', lookY: 'Look up and down' };
+    IN.AXIS_IDS.forEach(function (id) {
+      var prof = IN.profiles[id];
+      var label = names[id] || id;
+      refs.axisHost.appendChild(el('h3', { class: 'placard', text: label }));
+      slider(refs.axisHost, label + ' dead zone', prof.dead, 0, 0.5, 0.01, function (v) {
+        prof.dead = v; app.persistInput();
+      }, function (v) { return Math.round(v * 100) + ' percent'; });
+      slider(refs.axisHost, label + ' curve', prof.curve, 0, 1, 0.05, function (v) {
+        prof.curve = v; app.persistInput();
+      }, function (v) { return v === 0 ? 'linear' : v.toFixed(2); });
+      toggle(refs.axisHost, label + ' inverted', prof.invert, function (v) {
+        prof.invert = v; app.persistInput();
+      });
+    });
+  };
+
+  U.markConflicts = function () {
+    if (!refs.conflictHost) { return; }
+    var list = IN.conflicts();
+    if (!list.length) {
+      refs.conflictHost.textContent = 'No two actions share a control.';
+      refs.conflictHost.style.color = '';
+      return;
+    }
+    refs.conflictHost.textContent = list.map(function (c) {
+      return c.what + ' is bound to ' + c.actions.map(function (id) {
+        var a = IN.actionById(id);
+        return a ? a.label : id;
+      }).join(' and ');
+    }).join('. ') + '.';
+    refs.conflictHost.style.color = 'var(--flag)';
+  };
 
   U.buildBindingTable = function () {
     if (!refs.mapHost) { return; }
@@ -627,22 +707,34 @@
       groups[g].forEach(function (a) {
         var cell = el('td', { text: IN.describeBinding(a.id) });
         var actions = el('td', {});
-        button(actions, 'Rebind', function (e) {
-          var btn = e.target;
-          btn.textContent = 'Press a key';
+        function capture(mode, btn, label) {
+          btn.textContent = mode === 'pad' ? 'Move it' : 'Press a key';
           IN.captureNext(function (res) {
-            IN.bind(a.id, { key: res.key });
-            S.state.bindings = IN.exportMap();
-            S.save();
+            var b = IN.bindings[a.id] || {};
+            IN.bind(a.id, mode === 'pad'
+              ? { key: b.key, pad: res.pad }
+              : { key: res.key, pad: b.pad });
+            app.persistInput();
             cell.textContent = IN.describeBinding(a.id);
-            btn.textContent = 'Rebind';
+            btn.textContent = label;
             U.buildLegend();
-          });
+            U.markConflicts();
+          }, mode);
+        }
+        button(actions, 'Key', function (e) { capture('key', e.target, 'Key'); });
+        button(actions, 'Pad', function (e) { capture('pad', e.target, 'Pad'); });
+        button(actions, 'Clear', function () {
+          IN.bind(a.id, { key: null, pad: null });
+          app.persistInput();
+          cell.textContent = IN.describeBinding(a.id);
+          U.buildLegend();
+          U.markConflicts();
         });
         table.appendChild(el('tr', {}, [el('td', { text: a.label }), cell, actions]));
       });
       refs.mapHost.appendChild(table);
     });
+    U.markConflicts();
   };
 
   // ------------------------------------------------------------------- data

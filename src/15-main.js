@@ -1,4 +1,4 @@
-// AERODROME :: src/15-main.js :: v1.5.1
+// AERODROME :: src/15-main.js :: v1.11.0
 // The application: one fixed step loop, one render order, one control map.
 // Depends on every other file. Loads last.
 // GPL-3.0
@@ -184,8 +184,17 @@
     Object.keys(s.camera).forEach(function (k) { app.rig.settings[k] = s.camera[k]; });
     Object.keys(s.weather).forEach(function (k) { X.state[k] = s.weather[k]; });
     if (S.state.bindings) { IN.importMap(S.state.bindings); }
+    if (S.state.axisProfiles) { IN.importProfiles(S.state.axisProfiles); }
+    if (S.state.padIndex !== undefined) { IN.usePad(S.state.padIndex); }
     U.markCamera(app.rig.mode);
     U.markMute(s.muted);
+  };
+
+  app.persistInput = function () {
+    S.state.bindings = IN.exportMap();
+    S.state.axisProfiles = IN.exportProfiles();
+    S.state.padIndex = IN.padIndex;
+    S.save();
   };
 
   app.persistCamera = function () {
@@ -508,15 +517,27 @@
   function drawScene() {
     var st = app.state, rig = app.rig, cam = rig.cam, env = app.env;
     R.clear(P.RAMP.sky.start);
+    // The sky, the stars, the sun, the clouds and the grid are the backdrop.
+    // They write color and no depth, so everything real draws over them.
+    R.clearDepth();
     G.drawSkyPlane(cam, env);
     G.drawStars(cam, env);
     G.drawSun(cam, env);
     G.drawClouds(cam, env, app.time);
-    G.drawGroundGrid(cam, 400, 9000);
 
     G.resetQueue();
     W.emit(cam, env, app.time, app.frame);
-    G.submitMesh(cam, st.ac.mesh, st.pos, st.quat, { light: env.sunDir, ambient: env.ambient });
+    G.submitMesh(cam, st.ac.mesh, st.pos, st.quat, {
+      light: env.sunDir, ambient: env.ambient,
+      eyeClear: rig.mode === 'cockpit' ? 0.75 : 0
+    });
+    // The cockpit interior is real geometry, so it occludes the world and it
+    // moves against it when you look around.
+    if (rig.mode === 'cockpit') {
+      G.submitMesh(cam, AC.interiorFor(st.ac), st.pos, st.quat, {
+        light: env.sunDir, ambient: Math.min(1, env.ambient * 0.55 + 0.12), noHaze: true
+      });
+    }
     // The tug and the rope, drawn only while a tow is running.
     if (app.tow.active) {
       var tug = AC.byId('trainer');
@@ -528,7 +549,7 @@
         { x: b.x + side.x * 0.09, y: b.y - 0.6, z: b.z + side.z * 0.09 },
         { x: b.x - side.x * 0.09, y: b.y - 0.6, z: b.z - side.z * 0.09 },
         { x: a.x - side.x * 0.09, y: a.y + 0.2, z: a.z - side.z * 0.09 }
-      ], 'dark', { twoSided: true, noHaze: true, ambient: 1, bias: 1 });
+      ], 'dark', { twoSided: true, noHaze: true, ambient: 1 });
     }
     // Contact shadow, drawn as the aircraft's own silhouette on the ground.
     var agl = st.derived.agl;
@@ -549,12 +570,23 @@
       starting: st.engineState === 'starting',
       groundEffect: d.groundEffect
     };
+    // Instruments are read, not inhabited. They are screen space and they
+    // always win, so depth is off while they are drawn.
+    R.depthEnabled = false;
     if (rig.mode === 'cockpit') {
-      I.drawPanel(st.ac, d, app.time, opts);
-      I.drawCanopy(st.ac, rig, d);
+      // The panel is a flat plane about a metre in front of the eye. Under a
+      // small head rotation such a plane simply slides across the view, so
+      // sliding it is both the cheap answer and the correct one.
+      var panOff = {
+        x: -rig.look.yaw * (R.W * 0.62),
+        y: rig.look.pitch * (R.H * 0.55)
+      };
+      I.drawPanel(st.ac, d, app.time, opts, panOff);
+      I.drawCanopy(st.ac, rig, d, panOff);
     } else {
       I.drawHUD(st.ac, d, opts);
     }
+    R.depthEnabled = true;
     if (S.state.settings.showForces && rig.mode !== 'cockpit') { I.drawForces(cam, st); }
     if (S.state.settings.debug) {
       I.drawDebug(st, env, G.stats, app.fps, 'FRAME ' + app.frameMs.toFixed(1) + ' MS  MODE ' + rig.mode);

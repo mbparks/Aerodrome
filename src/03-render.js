@@ -1,4 +1,4 @@
-// AERODROME :: src/03-render.js :: v1.4.2
+// AERODROME :: src/03-render.js :: v1.9.0
 // Fixed function 3D pipeline: transform, near clip, painter sort, flat shade.
 // Depends on 00-core.js, 01-palette.js, 02-raster.js.
 // GPL-3.0
@@ -29,7 +29,15 @@
     red: { ramp: 'red', flat: true },
     flame: { ramp: 'flame', flat: true },
     grass: { ramp: 'grass' },
+    // Land materials. Scree is the rock ramp biased light, because a scree
+    // slope is the same stone in smaller pieces catching more sky.
     rock: { ramp: 'rock' },
+    scree: { ramp: 'rock', bias: 0.25 },
+    sand: { ramp: 'sand', flat: true },
+    crop: { ramp: 'crop', flat: true },
+    meadow: { ramp: 'grass', bias: 0.22 },
+    hedge: { ramp: 'grass', bias: -0.34 },
+    plough: { ramp: 'rock', bias: -0.3 },
     water: { ramp: 'water' },
     tarmac: { ramp: 'tarmac' },
     mark: { ramp: 'mark', flat: true },
@@ -82,8 +90,11 @@
   };
 
   G.project = function (cam, v) {
-    var inv = cam.f / v.z;
-    return { x: cam.cx + v.x * inv, y: cam.cy - v.y * inv, z: v.z };
+    var z = (v.z > G.NEAR * 0.5) ? v.z : G.NEAR * 0.5;
+    var inv = cam.f / z;
+    // iz is what the depth buffer stores. It is linear in screen space, so a
+    // scanline can interpolate it, and larger means nearer.
+    return { x: cam.cx + v.x * inv, y: cam.cy - v.y * inv, z: v.z, iz: 1 / z };
   };
 
   // ------------------------------------------------------------ queue
@@ -139,10 +150,10 @@
       if (ain !== bin) {
         if (side < 2) {
           t = (limit - a.x) / (b.x - a.x);
-          out.push({ x: limit, y: a.y + (b.y - a.y) * t });
+          out.push({ x: limit, y: a.y + (b.y - a.y) * t, iz: a.iz + (b.iz - a.iz) * t });
         } else {
           t = (limit - a.y) / (b.y - a.y);
-          out.push({ x: a.x + (b.x - a.x) * t, y: limit });
+          out.push({ x: a.x + (b.x - a.x) * t, y: limit, iz: a.iz + (b.iz - a.iz) * t });
         }
       }
     }
@@ -209,6 +220,22 @@
     pts = G.clipScreen(pts);
     if (!pts) { G.stats.clipped++; return; }
 
+    // Edge on slivers. A flat panel in the plane that contains the eye, which
+    // is common inside a cockpit, projects to a line one pixel wide and the
+    // full height of the screen. It is a correct rendering of a degenerate
+    // view and it looks like a scratch on the monitor. Anything this close
+    // and this thin is not information.
+    if (zmin < 8) {
+      var bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+      for (i = 0; i < pts.length; i++) {
+        if (pts[i].x < bx0) { bx0 = pts[i].x; }
+        if (pts[i].x > bx1) { bx1 = pts[i].x; }
+        if (pts[i].y < by0) { by0 = pts[i].y; }
+        if (pts[i].y > by1) { by1 = pts[i].y; }
+      }
+      if ((bx1 - bx0) < 1.5 || (by1 - by0) < 1.5) { G.stats.clipped++; return; }
+    }
+
     var color = G.shade(mat, nrm, opts.light, opts.ambient, opts.tint);
     // Distance haze, dithered toward the horizon band and never blended. It
     // starts further out and stops well short of a fifty percent checker,
@@ -217,15 +244,23 @@
     var db = null, dt = 0;
     if (!opts.noHaze) {
       var hz = M.clamp((z - G.HAZE_NEAR) / G.HAZE_RANGE, 0, 1);
+      // Height haze. The low ground sits under more air than the tops do, so
+      // the valley floor washes out first and the ridge line stays sharp.
+      if (opts.hazeBoost) { hz = M.clamp(hz * (1 + opts.hazeBoost), 0, 1); }
       if (hz > 0.04) {
         db = P.RAMP.sky.start + P.RAMP.sky.len - 1;
         dt = hz * hz * G.HAZE_MAX;
       }
     }
-    // Painter order. Pure centroid depth loses badly when a large polygon
-    // overlaps a small near one, so the key leans on the nearest vertex.
-    // opts.bias breaks ties for coplanar work like runway markings.
-    var key = -(zmin * 0.6 + z * 0.4) + (opts.bias || 0);
+    // The depth buffer decides what is in front. This ordering only groups
+    // the work sensibly and keeps dithered faces stable frame to frame; it is
+    // no longer load bearing, and opts.bias no longer exists.
+    var key = -(zmin * 0.6 + z * 0.4);
+    // Coplanar detail, runway markings and the contact shadow, gets a nudge
+    // toward the camera in depth rather than a nudge in the sort order.
+    if (opts.zlift) {
+      for (i = 0; i < pts.length; i++) { pts[i].iz *= (1 + opts.zlift); }
+    }
     push(pts, color, key, db, dt, 'soft');
   };
 
@@ -236,11 +271,21 @@
     var d = light ? Math.max(0, -V.dot(nrm, light)) : 0.5;
     var t = M.clamp(ambient + d * (1 - ambient), 0, 1);
     if (tint) { t = M.clamp(t + tint, 0, 1); }
+    // A material may sit high or low in its own ramp. That is how scree and
+    // hedgerow exist without costing a palette entry each.
+    if (m.bias) { t = M.clamp(t + m.bias, 0, 1); }
     return P.rampIndex(m.ramp, t);
   };
 
   G.submitMesh = function (cam, mesh, pos, quat, opts) {
     opts = opts || {};
+    // In the cockpit the camera sits inside the aeroplane, so some of the
+    // aeroplane's own faces pass through the eye. A polygon that contains the
+    // camera cannot be clipped into anything sensible: it projects to a
+    // sliver on the view axis, which is where the black line up the middle of
+    // every forward view was coming from. Faces that close are the seat and
+    // the floor, and nobody is looking at those.
+    var clear = opts.eyeClear || 0;
     var faces = mesh.faces, world = [];
     for (var i = 0; i < faces.length; i++) {
       var f = faces[i];
@@ -250,6 +295,14 @@
         var lv = f.v[j];
         var rv = quat ? Q.rotate(quat, { x: lv[0], y: lv[1], z: lv[2] }) : { x: lv[0], y: lv[1], z: lv[2] };
         verts.push({ x: pos.x + rv.x, y: pos.y + rv.y, z: pos.z + rv.z });
+      }
+      if (clear > 0) {
+        var tooClose = false;
+        for (j = 0; j < verts.length; j++) {
+          var ddx = verts[j].x - cam.pos.x, ddy = verts[j].y - cam.pos.y, ddz = verts[j].z - cam.pos.z;
+          if (ddx * ddx + ddy * ddy + ddz * ddz < clear * clear) { tooClose = true; break; }
+        }
+        if (tooClose) { continue; }
       }
       G.submitFace(cam, verts, f.mat, {
         light: opts.light, ambient: opts.ambient, twoSided: f.twoSided || opts.twoSided,
@@ -368,41 +421,33 @@
     if (s.x < -40 || s.y < -40 || s.x > R.W + 40 || s.y > R.H + 40) { return; }
     var core = P.RAMP.sun.start + P.RAMP.sun.len - 1;
     var glow = P.RAMP.sun.start;
-    R.circle(s.x | 0, s.y | 0, 9, glow, true);
-    R.circle(s.x | 0, s.y | 0, 6, core, true);
+    // Glare. A dithered halo that brightens the sky it sits in rather than
+    // painting a disc of white on it, thinning with distance from the sun.
+    var cx = s.x | 0, cy = s.y | 0, rad = 46;
+    for (var gy = cy - rad; gy <= cy + rad; gy++) {
+      if (gy < 0 || gy >= R.H) { continue; }
+      for (var gx = cx - rad; gx <= cx + rad; gx++) {
+        if (gx < 0 || gx >= R.W) { continue; }
+        var dx2 = gx - cx, dy2 = gy - cy;
+        var dd = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+        if (dd > rad || dd < 9) { continue; }
+        var src = R.get(gx, gy);
+        var sky0 = P.RAMP.sky.start, sky1 = sky0 + P.RAMP.sky.len - 1;
+        if (src < sky0 || src >= sky1) { continue; }
+        var f = (1 - dd / rad);
+        R.px(gx, gy, P.ditherPick(src, src + 1, f * f * 0.9, gx, gy, 'soft'));
+      }
+    }
+    R.circle(cx, cy, 9, glow, true);
+    R.circle(cx, cy, 6, core, true);
   };
 
-  // Scrolling ground grid, drawn under the terrain mesh so distant ground has
-  // motion cues even where there is no geometry left.
-  G.drawGroundGrid = function (cam, spacing, extent) {
-    spacing = spacing || 500;
-    extent = extent || 9000;
-    var idx = P.RAMP.rock.start + 1;
-    var ox = Math.round(cam.pos.x / spacing) * spacing;
-    var oz = Math.round(cam.pos.z / spacing) * spacing;
-    var n = Math.floor(extent / spacing);
-    for (var i = -n; i <= n; i++) {
-      G.groundSeg(cam, ox + i * spacing, oz - extent, ox + i * spacing, oz + extent, idx);
-      G.groundSeg(cam, ox - extent, oz + i * spacing, ox + extent, oz + i * spacing, idx);
-    }
-  };
-
-  G.groundSeg = function (cam, x0, z0, x1, z1, idx) {
-    var a = G.toView(cam, { x: x0, y: 0, z: z0 });
-    var b = G.toView(cam, { x: x1, y: 0, z: z1 });
-    if (a.z < G.NEAR && b.z < G.NEAR) { return; }
-    if (a.z < G.NEAR) {
-      var t = (G.NEAR - a.z) / (b.z - a.z);
-      a = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: G.NEAR };
-    } else if (b.z < G.NEAR) {
-      var u = (G.NEAR - b.z) / (a.z - b.z);
-      b = { x: b.x + (a.x - b.x) * u, y: b.y + (a.y - b.y) * u, z: G.NEAR };
-    }
-    var pa = G.project(cam, a), pb = G.project(cam, b);
-    if ((pa.x < 0 && pb.x < 0) || (pa.x > R.W && pb.x > R.W)) { return; }
-    if ((pa.y < 0 && pb.y < 0) || (pa.y > R.H && pb.y > R.H)) { return; }
-    R.line(pa.x, pa.y, pb.x, pb.y, idx);
-  };
+  // The scrolling ground grid was removed in v1.10.0. It was drawn at sea
+  // level, which after the terrain gained a floor of forty two metres put it
+  // permanently underground. The only thing it still produced was a single
+  // black pixel column up the middle of the screen, from a grid line clipped
+  // at the near plane and projected to the view axis. The sky plane already
+  // fills the ground beyond the terrain mesh.
 
   // Parallax cloud layer, drawn from sprite cells so it shares the scanline
   // budget and flickers like the rest of the sprite plane.
@@ -484,14 +529,17 @@
     var c = R.cells[name];
     if (!c) { return false; }
     if (p.x < -64 || p.x > R.W + 64 || p.y < -64 || p.y > R.H + 64) { return false; }
+    // One depth for the whole sprite, taken at its anchor, so a tree behind a
+    // hill is behind the hill.
+    var iz = p.iz;
     var ok;
     if (tier === 'near') {
-      ok = R.drawCellScaled(name, p.x - c.w, p.y - c.h * 2, flipH, 2);
+      ok = R.drawCellScaled(name, p.x - c.w, p.y - c.h * 2, flipH, 2, 0, iz);
     } else if (tier === 'mid') {
-      ok = R.drawCell(name, p.x - c.w / 2, p.y - c.h, flipH);
+      ok = R.drawCell(name, p.x - c.w / 2, p.y - c.h, flipH, 0, iz);
     } else {
       var size = 2;
-      ok = R.drawSpeck(p.x, p.y - size, speckIdx || c.data[(c.h - 1) * c.w + (c.w >> 1)] || 1, size);
+      ok = R.drawSpeck(p.x, p.y - size, speckIdx || c.data[(c.h - 1) * c.w + (c.w >> 1)] || 1, size, iz);
     }
     if (ok) { G.stats.sprites++; }
     return ok;
@@ -545,7 +593,7 @@
       verts.push({ x: h[k].x, y: groundY, z: h[k].z });
     }
     G.submitFace(cam, verts, 'shadow', {
-      twoSided: true, noHaze: true, bias: opts.bias || 0.6,
+      twoSided: true, noHaze: true, zlift: 0.002,
       light: opts.light, ambient: opts.ambient
     });
   };

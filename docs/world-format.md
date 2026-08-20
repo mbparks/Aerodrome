@@ -1,6 +1,6 @@
 # The AERODROME world file
 
-<!-- AERODROME :: docs/world-format.md :: v1.4.0 -->
+<!-- AERODROME :: docs/world-format.md :: v1.8.0 -->
 
 A world file is one JSON object describing a place to fly. The valley that
 ships in the box is not special: it is `W.STOCK` in `src/07-world.js`, which is
@@ -74,7 +74,7 @@ thirty four buildings by hand.
 
 ## Structures
 
-Six types. Anything else is dropped.
+Thirteen types. Anything else is dropped.
 
 | Type | Fields | Notes |
 | --- | --- | --- |
@@ -84,6 +84,13 @@ Six types. Anything else is dropped.
 | `bridge` | `z` | finds its own x by following the river |
 | `ring` | `x`, `z`, `radius`, `tiltDeg` | the things worth flying through |
 | `block` | `x`, `z`, `w`, `h`, `d`, `mat` | `mat` is `hull`, `rock` or `accent` |
+| `barn` | `x`, `z`, `rotDeg` | pitched roof, big door |
+| `silo` | `x`, `z` | put two next to a barn |
+| `watertower` | `x`, `z` | legs and a tank, visible for miles |
+| `church` | `x`, `z`, `rotDeg` | the spire is the landmark |
+| `mast` | `x`, `z`, `height` | carries a lamp at night |
+| `powerline` | `x`, `z`, `rotDeg`, `count`, `span` | poles with sagging wires between them |
+| `fence` | `x`, `z`, `rotDeg`, `length` | follows the ground it crosses |
 
 ## Camera sites
 

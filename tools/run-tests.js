@@ -1,4 +1,4 @@
-// AERODROME :: tools/run-tests.js :: v1.5.0
+// AERODROME :: tools/run-tests.js :: v1.6.0
 // Runs the same assertions as tests.html, without a browser. Development tool
 // only. Nothing in src/ depends on this file, and the simulator never loads it.
 // Usage: node tools/run-tests.js

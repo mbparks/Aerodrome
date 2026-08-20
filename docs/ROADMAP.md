@@ -1,6 +1,6 @@
 # AERODROME roadmap
 
-<!-- AERODROME :: docs/ROADMAP.md :: v1.5.1 -->
+<!-- AERODROME :: docs/ROADMAP.md :: v1.11.0 -->
 
 Revised after v1.5.0. Everything planned moved up one number, because a
 fullscreen cockpit and a deck that fits the window turned out to matter more
@@ -33,33 +33,39 @@ breaking one, the feature loses.
 
 # Ahead
 
+Planned milestones are no longer given version numbers. Reality has taken the
+next number three times running now, and renumbering the list each time was
+churn that told nobody anything. They are in order; the next one to ship gets
+the next number.
+
+The graphics work is done. `docs/GRAPHICS-PLAN.md` ran as five milestones,
+Depth through Air plus the cockpit interior, from v1.6.0 to v1.10.0. The only
+thing left of it is the **living world** dropped from Populate, which is
+content rather than rendering and is listed below with everything else.
+
+Trim shipped as v1.11.0. The order from here is the living world, then
+Fingertips.
+
 ## v1.0.1 - Review pass (open)
 
 Still open, because the hands on review has not happened yet. Whatever the
 first real hours in the seat say about feel goes here, plus the About panel
 feedback URL once the repository path is real.
 
-## v1.6 - Trim
+## The living world
 
-Input. It is the layer everything else is played through and the one that has
-had the least attention. Small, and overdue.
+Left out of Populate. The valley has things in it now; it does not have much
+happening in it.
 
-* Gamepad rebinding that actually listens for the gamepad. The capture in the
-  Controls drawer is keyboard only today, so the sensible default pad map is
-  the only pad map anyone can have.
-* Per axis dead zone, so a worn stick does not fly the aeroplane on its own.
-* Per axis response curve, because a linear stick on a warbird is unflyable
-  and a curved one is fine.
-* Per axis inversion, saved with everything else.
-* Multiple pads and hot plug: notice them, list them, let the person pick.
-* Conflict detection when two actions land on the same key, shown in the
-  Controls drawer rather than discovered in the air.
-* Assertions: a captured pad binding round trips through the save file; dead
-  zone maps rest to exactly zero and full deflection to exactly one; the
-  response curve is monotone and passes through both ends unchanged; a
-  duplicate binding is reported.
+* A train that runs a line on a schedule, which needs a railway in the world
+  file first.
+* Cattle that wander their field rather than standing in it forever.
+* A tug taxiing on the apron, and chimney smoke over the town.
+* Flocks that hold a formation instead of circling independently.
+* The mover system already takes a path and a speed, so most of this is new
+  path types rather than new machinery.
 
-## v1.7 - Fingertips
+## Fingertips
 
 Touch. The chrome is already sized for it, the aircraft is not, and a browser
 flight simulator that cannot be flown on a phone is missing most of the people
@@ -77,7 +83,7 @@ who could open it.
   the layer appears only under a coarse pointer or an explicit override; the
   buttons offered match the legend for that aircraft.
 
-## v1.8 - Frontal
+## Frontal
 
 Weather with a shape to it. Today the wind is a mean vector plus gusts plus
 terrain effects, which is good, and it never changes its mind, which is not.
@@ -92,15 +98,15 @@ terrain effects, which is good, and it never changes its mind, which is not.
   wind through the angle it says it will, over the time it says; reduced
   visibility only shortens the haze distance and never adds a palette entry.
 
-## v1.9 - Logbook
+## Logbook
 
 Structure around the flying. Moved back from v1.5 because the groundwork below
-is real work, not a footnote.
+is real work, not a footnote. Moved back once. Do not move it again without
+saying why.
 
 * Seed everything in the frame path first. The gust process and the camera
   shake both call `Math.random` today, so nothing is reproducible until they
   do not. This is the milestone's first task, not its last.
-* Moved back once already. Do not move it back again without saying why.
 * Deterministic replay from the input stream plus the seed. The integrator is
   already fixed step, so once the randomness is seeded this is close to free.
 * Scoring for spot landings and the ring course, written into the flight log
@@ -111,7 +117,7 @@ is real work, not a footnote.
   step still completes with `Math.random` replaced by a function that throws,
   which is the only honest way to prove the frame path is seeded.
 
-## v1.10 - Cartography
+## Cartography
 
 A world editor, last, because a world is already a text file and the format is
 documented. This is about making it pleasant, and about closing the loose ends
@@ -120,7 +126,8 @@ the format left behind.
 * A map view with structures you can place and drag, and terrain parameters
   with a live preview.
 * Honour `runway.headingDeg`, which is currently stored and ignored.
-* More structure types, since six is a small vocabulary.
+* More structure types. Thirteen is a decent vocabulary now, but there is no
+  railway, no quarry and no dam in it.
 * Several worlds kept in the settings file rather than one at a time.
 * Assertions: anything the editor writes passes the same validator an imported
   file does; a rotated runway rotates its markings and its lights with it.
@@ -145,6 +152,157 @@ the format left behind.
   you have never seen before.
 
 # Shipped
+
+## v1.11.0 - Trim
+
+Input, and the oldest item on the list. A stick is not a switch, and until now
+the simulator treated it like one.
+
+* Gamepad rebinding that listens for the gamepad. Press Pad and then move the
+  control; rest positions are snapshotted first, because a trigger at rest
+  reads minus one and a worn stick never reads exactly zero. Escape cancels.
+* Per axis dead zone, response curve and inversion, set on the axis rather
+  than on the binding, so they apply however that axis is driven. Rest maps to
+  exactly zero and full deflection to exactly one at every curve setting, and
+  the curve is monotone, because a stick that reverses halfway through its
+  travel is worse than no curve at all.
+* Several pads, listed by name, with hot plug. A pad arriving while nothing is
+  chosen becomes the choice; a pad leaving only clears it if it was the one in
+  use.
+* A Clear button, so an action can be genuinely unbound.
+* Conflict reporting in the Controls drawer.
+* Twenty four new assertions, suite at 228.
+
+Found by the new conflict assertion, within a minute of writing it: the stock
+gamepad map drove both the rudder and the view from the right stick, so
+looking right also fed in right rudder. The rudder is on the shoulder buttons
+now. That map has been wrong since v1.0 and nobody noticed, because nobody had
+asked the question in a form a machine could answer.
+
+## v1.10.0 - Cockpit
+
+The last item of Phase A, deferred from v1.6.0 because it looked like a
+re-authoring job on twelve panels.
+
+* The interior is generated from a nine number spec measured from the eye, so
+  nobody had to author twelve cockpits. The defaults are an aeroplane; ten
+  aircraft override part of it. The warbird is open with high sills, the
+  glider is thin posts and glass, the balloon is a basket, the helicopter is a
+  bubble.
+* It is real geometry in the depth pass, so it occludes the world and moves
+  against it when you look around.
+* The panel stayed in screen space and slides with head look, because a panel
+  a metre from your eye is a plane, and a plane under a small rotation slides.
+  That is the correct answer, not a shortcut.
+* Nine new assertions, suite at 204.
+
+Two bugs found by looking at it, both old:
+
+The black line up the middle of every forward view was a flat panel in the
+plane that contains the eye, projecting to a sliver one pixel wide and the
+full height of the screen. Faces that close and that thin are culled now. The
+first suspect was the scrolling ground grid, which turned out to be innocent
+but was also drawn at sea level, permanently underground since the terrain
+gained a floor, so it went too.
+
+The first cockpit had posts half a metre from the pilot's face, which fills a
+third of the windscreen. They are where a windscreen post actually is now.
+
+## v1.9.0 - Air
+
+Phase D of the graphics plan, and the last of the four.
+
+* A skyline map. Every cell of the coarse terrain grid records how high the
+  horizon stands in eight directions, computed once by ray marching over the
+  array rather than over the noise field, which is three orders of magnitude
+  cheaper. A hillside is in shadow when the sun is lower than its own horizon,
+  with a degree of softness at the terminator.
+* Cloud shade drifting with the wind, as a field rather than as geometry.
+* Sun glare as a dithered halo that brightens the sky it sits in rather than
+  painting a disc on it, and glint on water where it would reflect the sun
+  toward the camera.
+* Height haze, so the valley floor washes out before the ridge line does.
+* Twelve new assertions, suite at 195. Frame cost still three milliseconds.
+
+## v1.8.0 - Populate
+
+Phase C of the graphics plan. The valley had six structure types and four
+sprites in it, which is not a place, it is a test scene.
+
+* Seven new structures: barn, silo, water tower, church with a spire, radio
+  mast, power line runs with sagging wires between the poles, and fences that
+  follow the ground they cross. All of them are world file data.
+* Six new sprite cells: conifer, dead tree, boulder, hay bale, cow, fence post.
+* Scatter placed by a density field instead of uniformly at random, with a
+  thinning tree line as the ground rises and the species chosen by what the
+  ground is made of. Conifers and boulders on the scree, cattle in the fields,
+  hay bales only in the ripe crop.
+* Ten new assertions, suite at 183, including one that measures the clustering
+  against what pure chance would give: variance 10.9 against a mean of 5.2,
+  where a uniform sprinkle would put them equal.
+
+Not done: the living world from 3.3. The movers still run their original
+three paths, and there is no train, no taxiing tug and no chimney smoke.
+
+Learned: the first clustering assertion was measured wrong. Counting only the
+bins that had something in them truncates the distribution and hides exactly
+the property being tested, and clustering is a statement about a scale, so the
+bin has to match the scale of the feature.
+
+## v1.7.0 - Land
+
+Phase B of the graphics plan. The ground was one noise field and three
+materials, which is why it read as a green sheet with a bump on it.
+
+* Material by what the ground is doing: slope for scree and rock, the
+  waterline for sand, a field grid for farmland with hedgerows on the
+  boundaries and a crop per field.
+* Drainage. Fractal noise has none, so one flow accumulation pass at build
+  time routes every cell into its lowest neighbour and lowers the ground where
+  the water collects. Gullies join. Cached in a grid and sampled bilinearly,
+  so the flight model pays nothing for it.
+* Level of detail skirts, so the seam between tile bands can no longer be a
+  slot of sky in a hillside.
+* The palette decision from Part 5 went with option 1 and paid for two entries
+  rather than four: grass had a duplicate shade after quantization and the
+  shadow did not need a slot of its own. The other four new materials came
+  from a bias field that reads an existing ramp high or low, and cost nothing.
+* The noise hash was a closure allocated on every call. Terrain sampling calls
+  it millions of times a second now, so it is hoisted, and tile corners are
+  served from a small direct mapped cache.
+
+Fourteen new assertions, suite at 173. Frame cost unchanged at three
+milliseconds.
+
+Learned: my benchmark harness runs code inside a node vm context, which is
+roughly a hundred times slower than plain node. Every timing measured through
+it is pessimistic, and the real figures are better than anything reported here.
+
+## v1.6.0 - Depth
+
+Phase A of the graphics plan. The renderer sorted whole faces and hoped, and
+sprites were painted over the finished scene with no depth test at all, which
+is why a tree could stand in front of the hill it was growing on.
+
+* An inverse depth buffer, one float a pixel, cleared to zero each frame.
+  Reciprocal depth is linear in screen space, so a scanline interpolates it
+  between the two edge crossings and each pixel is one compare and one store.
+* Sprites test a single depth taken at their anchor and keep their per
+  scanline budget and their flicker.
+* Both sort biases became small lifts in depth, which is what they were always
+  trying to be.
+* The build time subdivision from v1.2 is retired. It existed only to make a
+  sorting error smaller, and the error is now impossible. Face count near the
+  field fell from about 2,080 to 929.
+* Nine new assertions, suite at 159, including the one that matters: a frame
+  is identical whichever order its faces were submitted in.
+
+Measured: three milliseconds a frame before, three after, with half the
+geometry. Depth was free the whole time.
+
+Not done: the cockpit is still drawn in screen space. That turned out to be a
+re-authoring job on twelve panels rather than a renderer change, so it left
+Phase A and became its own milestone.
 
 ## v1.5.0 - Cockpit
 

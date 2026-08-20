@@ -1,4 +1,4 @@
-// AERODROME :: src/11-input.js :: v1.5.0
+// AERODROME :: src/11-input.js :: v1.11.0
 // Keyboard, mouse and Gamepad API. Every action is remappable and the map is
 // saved locally and included in the export.
 // Depends on 00-core.js.
@@ -52,8 +52,11 @@
     b.rollRight.pad = { type: 'axis', index: 0, dir: 1 };
     b.pitchDown.pad = { type: 'axis', index: 1, dir: -1 };
     b.pitchUp.pad = { type: 'axis', index: 1, dir: 1 };
-    b.yawLeft.pad = { type: 'axis', index: 2, dir: -1 };
-    b.yawRight.pad = { type: 'axis', index: 2, dir: 1 };
+    // Rudder on the shoulders, not on the right stick. The right stick is the
+    // view, and the stock map used to drive both from it, so looking right
+    // also fed in right rudder. The conflict assertion found that.
+    b.yawLeft.pad = { type: 'button', index: 4 };
+    b.yawRight.pad = { type: 'button', index: 5 };
     b.throttleUp.pad = { type: 'button', index: 7 };
     b.throttleDown.pad = { type: 'button', index: 6 };
     b.burner.pad = { type: 'button', index: 0 };
@@ -66,6 +69,42 @@
     b.lookUp.pad = { type: 'axis', index: 3, dir: -1 };
     b.lookDown.pad = { type: 'axis', index: 3, dir: 1 };
     return b;
+  };
+
+  // ------------------------------------------------------- axis profiles
+  // A stick is not a switch. Every analogue axis gets a dead zone so a worn
+  // one does not fly the aeroplane on its own, a response curve because a
+  // linear stick on a warbird is unflyable, and an inversion because half the
+  // world pulls back to climb on a pad and the other half does not.
+  IN.AXIS_IDS = ['pitch', 'roll', 'yaw', 'throttle', 'lookX', 'lookY'];
+
+  IN.defaultProfiles = function () {
+    var out = {};
+    IN.AXIS_IDS.forEach(function (id) {
+      out[id] = { dead: 0.10, curve: 0.35, invert: false };
+    });
+    // Looking around wants no curve at all: it is a camera, not a control.
+    out.lookX.curve = 0;
+    out.lookY.curve = 0;
+    return out;
+  };
+
+  IN.profiles = IN.defaultProfiles();
+
+  // Rest maps to exactly zero and full deflection to exactly one. Everything
+  // in between is bent, and the bend is monotone so the stick never reverses
+  // on you halfway through its travel.
+  IN.shape = function (v, prof) {
+    if (!prof) { return v; }
+    var sign = v < 0 ? -1 : 1;
+    var mag = Math.abs(v);
+    var dead = M.clamp(prof.dead || 0, 0, 0.6);
+    if (mag <= dead) { return 0; }
+    if (mag > 1) { mag = 1; }
+    var t = (mag - dead) / (1 - dead);
+    var curve = M.clamp(prof.curve || 0, 0, 1);
+    var out = t * (1 - curve) + t * t * t * curve;
+    return sign * out * (prof.invert ? -1 : 1);
   };
 
   IN.bindings = IN.defaultBindings();
@@ -96,8 +135,10 @@
     document.addEventListener('keydown', function (e) {
       if (IN.capture) {
         e.preventDefault();
-        var cb = IN.capture; IN.capture = null;
-        cb({ key: e.code });
+        var cap0 = IN.capture;
+        // Escape gets you out of a capture you did not mean to start.
+        IN.capture = null;
+        if (e.code !== 'Escape' && cap0.key) { cap0.cb({ key: e.code }); }
         return;
       }
       if (!IN.enabled) { return; }
@@ -133,8 +174,16 @@
       });
       IN.target.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     }
-    window.addEventListener('gamepadconnected', function (e) { IN.padIndex = e.gamepad.index; });
-    window.addEventListener('gamepaddisconnected', function () { IN.padIndex = null; });
+    // Hot plug. A pad arriving while nothing is chosen becomes the choice; a
+    // pad leaving only clears the choice if it was the one in use.
+    window.addEventListener('gamepadconnected', function (e) {
+      if (IN.padIndex === null) { IN.padIndex = e.gamepad.index; }
+      if (IN.onPadChange) { IN.onPadChange(); }
+    });
+    window.addEventListener('gamepaddisconnected', function (e) {
+      if (e.gamepad && e.gamepad.index === IN.padIndex) { IN.padIndex = null; }
+      if (IN.onPadChange) { IN.onPadChange(); }
+    });
     return true;
   };
 
@@ -159,13 +208,40 @@
     return e;
   };
 
+  // Every pad the browser can see, so the person can pick one rather than
+  // being given whichever the browser happened to list first.
+  IN.pads = function () {
+    var out = [];
+    if (typeof navigator === 'undefined' || !navigator.getGamepads) { return out; }
+    var pads = navigator.getGamepads();
+    for (var i = 0; i < pads.length; i++) {
+      if (pads[i] && pads[i].connected) {
+        out.push({ index: pads[i].index, id: pads[i].id || ('Pad ' + pads[i].index) });
+      }
+    }
+    return out;
+  };
+
   IN.pad = function () {
     if (typeof navigator === 'undefined' || !navigator.getGamepads) { return null; }
     var pads = navigator.getGamepads();
-    for (var i = 0; i < pads.length; i++) {
-      if (pads[i] && pads[i].connected) { return pads[i]; }
+    if (IN.padIndex !== null && pads[IN.padIndex] && pads[IN.padIndex].connected) {
+      return pads[IN.padIndex];
     }
+    for (var i = 0; i < pads.length; i++) {
+      if (pads[i] && pads[i].connected) {
+        // Whatever we fall back to becomes the choice, so it is stable.
+        IN.padIndex = pads[i].index;
+        return pads[i];
+      }
+    }
+    IN.padIndex = null;
     return null;
+  };
+
+  IN.usePad = function (index) {
+    IN.padIndex = (index === null || index === undefined) ? null : (index | 0);
+    return IN.padIndex;
   };
 
   var prevPadButtons = {};
@@ -175,6 +251,33 @@
     for (key in IN.axes) { raw[key] = 0; }
 
     var pad = IN.pad();
+
+    // Capturing a gamepad binding. The rest positions are snapshotted when
+    // capture starts, because a trigger at rest can read minus one and a
+    // worn stick never reads exactly zero.
+    if (IN.capture && IN.capture.pad && pad) {
+      var cap = IN.capture;
+      if (!cap.rest) {
+        cap.rest = [];
+        for (i = 0; i < pad.axes.length; i++) { cap.rest.push(pad.axes[i] || 0); }
+      }
+      for (i = 0; i < pad.buttons.length; i++) {
+        var cb2 = pad.buttons[i];
+        if (cb2 && (cb2.pressed || cb2.value > 0.6)) {
+          IN.capture = null;
+          cap.cb({ pad: { type: 'button', index: i } });
+          return IN.axes;
+        }
+      }
+      for (i = 0; i < pad.axes.length; i++) {
+        var move = (pad.axes[i] || 0) - (cap.rest[i] || 0);
+        if (Math.abs(move) > 0.65) {
+          IN.capture = null;
+          cap.cb({ pad: { type: 'axis', index: i, dir: move > 0 ? 1 : -1 } });
+          return IN.axes;
+        }
+      }
+    }
     for (i = 0; i < IN.ACTIONS.length; i++) {
       a = IN.ACTIONS[i];
       var b = IN.bindings[a.id];
@@ -183,11 +286,12 @@
       if (b.key && IN.down[b.key]) { v = 1; }
       if (pad && b.pad) {
         if (b.pad.type === 'axis') {
-          var av = pad.axes[b.pad.index] || 0;
-          if (Math.abs(av) > 0.12) {
-            var signed = av * (b.pad.dir || 1);
-            if (signed > 0) { v = Math.max(v, Math.min(1, signed)); }
-          }
+          // The profile of the axis this action drives, so a dead zone and a
+          // curve set once apply to every binding that feeds it.
+          var prof = IN.profiles[a.axis];
+          var av = IN.shape(pad.axes[b.pad.index] || 0, prof);
+          var signed = av * (b.pad.dir || 1);
+          if (signed > 0) { v = Math.max(v, Math.min(1, signed)); }
         } else if (b.pad.type === 'button') {
           var btn = pad.buttons[b.pad.index];
           var pressed = btn && (btn.pressed || btn.value > 0.4);
@@ -235,6 +339,28 @@
 
   IN.setThrottle = function (v) { IN.axes.throttle = M.clamp(v, 0, 1); };
 
+  // Two actions on the same key is not an error, it is a thing people do by
+  // accident and then discover in the air. Reported, not prevented.
+  IN.conflicts = function () {
+    var byKey = {}, byPad = {}, out = [];
+    IN.ACTIONS.forEach(function (a) {
+      var b = IN.bindings[a.id];
+      if (!b) { return; }
+      if (b.key) { (byKey[b.key] = byKey[b.key] || []).push(a.id); }
+      if (b.pad) {
+        var tag = b.pad.type + b.pad.index + (b.pad.dir === -1 ? '-' : '+');
+        (byPad[tag] = byPad[tag] || []).push(a.id);
+      }
+    });
+    Object.keys(byKey).forEach(function (k) {
+      if (byKey[k].length > 1) { out.push({ kind: 'key', what: IN.keyLabel(k), actions: byKey[k] }); }
+    });
+    Object.keys(byPad).forEach(function (k) {
+      if (byPad[k].length > 1) { out.push({ kind: 'pad', what: k, actions: byPad[k] }); }
+    });
+    return out;
+  };
+
   IN.bind = function (actionId, binding) {
     if (!IN.bindings[actionId]) { IN.bindings[actionId] = { key: null, pad: null }; }
     if (binding.key !== undefined) { IN.bindings[actionId].key = binding.key; }
@@ -262,9 +388,34 @@
       .replace(/^Numpad/, 'num ');
   };
 
-  IN.captureNext = function (cb) { IN.capture = cb; };
+  // mode is 'key' or 'pad'. A key capture is answered by the keydown handler,
+  // a pad capture by the poll in update.
+  IN.captureNext = function (cb, mode) {
+    IN.capture = { cb: cb, pad: mode === 'pad', key: mode !== 'pad', rest: null };
+  };
+
+  IN.cancelCapture = function () { IN.capture = null; };
 
   IN.exportMap = function () { return AERO.util.deepCopy(IN.bindings); };
+
+  IN.exportProfiles = function () { return AERO.util.deepCopy(IN.profiles); };
+
+  IN.importProfiles = function (list) {
+    var fresh = IN.defaultProfiles();
+    if (list && typeof list === 'object') {
+      IN.AXIS_IDS.forEach(function (id) {
+        var p = list[id];
+        if (!p || typeof p !== 'object') { return; }
+        if (typeof p.dead === 'number' && isFinite(p.dead)) { fresh[id].dead = M.clamp(p.dead, 0, 0.6); }
+        if (typeof p.curve === 'number' && isFinite(p.curve)) { fresh[id].curve = M.clamp(p.curve, 0, 1); }
+        fresh[id].invert = !!p.invert;
+      });
+    }
+    IN.profiles = fresh;
+    return fresh;
+  };
+
+  IN.resetProfiles = function () { IN.profiles = IN.defaultProfiles(); return IN.profiles; };
 
   IN.importMap = function (map) {
     if (!map || typeof map !== 'object') { return false; }

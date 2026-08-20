@@ -1,4 +1,4 @@
-// AERODROME :: src/02-raster.js :: v1.4.2
+// AERODROME :: src/02-raster.js :: v1.8.0
 // Software rasterizer writing palette indices into a fixed framebuffer.
 // Depends on 00-core.js, 01-palette.js.
 // GPL-3.0
@@ -17,9 +17,17 @@
   R.flickerEnabled = true;
   R.overflowCount = 0;
 
+  // ------------------------------------------------------------- depth
+  // Inverse depth, one float a pixel. Larger is nearer, so the buffer clears
+  // to zero and anything in front of the sky passes. Reciprocal depth is
+  // linear in screen space, which is why a scanline can interpolate it.
+  R.zbuf = new Float32Array(1);
+  R.depthEnabled = true;
+
   R.setSize = function (w, h) {
     R.W = w; R.H = h;
     if (R.buf.length < w * h) { R.buf = new Uint8Array(w * h); }
+    if (R.zbuf.length < w * h) { R.zbuf = new Float32Array(w * h); }
   };
 
   R.clear = function (idx) {
@@ -27,6 +35,32 @@
     R.buf.fill(idx || 0, 0, n);
     R.spriteLoad.fill(0, 0, R.H);
     R.overflowCount = 0;
+  };
+
+  R.clearDepth = function () {
+    R.zbuf.fill(0, 0, R.W * R.H);
+  };
+
+  // A span with depth. iz runs from iz0 at x0 to iz1 at x1.
+  R.hlineZ = function (y, x0, x1, idx, iz0, iz1, ditherB, ditherT, pattern) {
+    if (y < 0 || y >= R.H) { return; }
+    if (x1 < x0) { var t = x0; x0 = x1; x1 = t; var ti = iz0; iz0 = iz1; iz1 = ti; }
+    var span = x1 - x0;
+    var step = (span > 0) ? (iz1 - iz0) / span : 0;
+    if (x0 < 0) { iz0 += step * -x0; x0 = 0; }
+    if (x1 >= R.W) { x1 = R.W - 1; }
+    var base = y * R.W;
+    var iz = iz0;
+    var dithered = (ditherB !== undefined && ditherB !== null);
+    for (var x = x0; x <= x1; x++, iz += step) {
+      var i = base + x;
+      if (iz > R.zbuf[i]) {
+        R.zbuf[i] = iz;
+        R.buf[i] = dithered
+          ? P.ditherPick(idx, ditherB, ditherT, x, y, pattern)
+          : idx;
+      }
+    }
   };
 
   R.px = function (x, y, idx) {
@@ -116,10 +150,13 @@
   // Convex polygons only, flat shaded, no z buffer. Painter order is the
   // caller's problem, exactly as it was on the hardware.
   var xs = new Float32Array(16);
+  var izs = new Float32Array(16);   // inverse depth at each edge crossing
 
   R.fillPoly = function (pts, idx, ditherB, ditherT, pattern) {
     var n = pts.length;
     if (n < 3) { return; }
+    // Depth is used when the caller supplied it and the buffer is on.
+    var depth = R.depthEnabled && (pts[0].iz !== undefined);
     var ymin = 1e9, ymax = -1e9, i;
     for (i = 0; i < n; i++) {
       if (pts[i].y < ymin) { ymin = pts[i].y; }
@@ -136,21 +173,35 @@
         var ay = a.y, by = b.y;
         if ((ay <= sy && by > sy) || (by <= sy && ay > sy)) {
           var t = (sy - ay) / (by - ay);
-          if (count < 16) { xs[count++] = a.x + (b.x - a.x) * t; }
+          if (count < 16) {
+            if (depth) { izs[count] = a.iz + (b.iz - a.iz) * t; }
+            xs[count++] = a.x + (b.x - a.x) * t;
+          }
         }
       }
       if (count < 2) { continue; }
-      var lo = xs[0], hi = xs[0];
+      var lo = xs[0], hi = xs[0], loI = 0, hiI = 0;
       for (i = 1; i < count; i++) {
-        if (xs[i] < lo) { lo = xs[i]; }
-        if (xs[i] > hi) { hi = xs[i]; }
+        if (xs[i] < lo) { lo = xs[i]; loI = i; }
+        if (xs[i] > hi) { hi = xs[i]; hiI = i; }
       }
       var px0 = Math.ceil(lo - 0.5), px1 = Math.floor(hi - 0.5);
       if (px1 < px0) { px1 = px0; }
-      if (ditherB === undefined || ditherB === null) {
-        R.hline(y, px0, px1, idx);
+      if (!depth) {
+        if (ditherB === undefined || ditherB === null) {
+          R.hline(y, px0, px1, idx);
+        } else {
+          R.hlineDither(y, px0, px1, idx, ditherB, ditherT, pattern);
+        }
       } else {
-        R.hlineDither(y, px0, px1, idx, ditherB, ditherT, pattern);
+        // Interpolate inverse depth to the ends of the span, then across it.
+        var izLo = izs[loI], izHi = izs[hiI];
+        var wide = hi - lo;
+        var f0 = (wide > 0) ? (px0 + 0.5 - lo) / wide : 0;
+        var f1 = (wide > 0) ? (px1 + 0.5 - lo) / wide : 0;
+        R.hlineZ(y, px0, px1, idx,
+          izLo + (izHi - izLo) * f0, izLo + (izHi - izLo) * f1,
+          ditherB, ditherT, pattern);
       }
     }
   };
@@ -182,9 +233,10 @@
   };
 
   // Returns false when the scanline budget rejected the sprite.
-  R.drawCell = function (name, x, y, flipH, tintShift) {
+  R.drawCell = function (name, x, y, flipH, tintShift, iz) {
     var c = R.cells[name];
     if (!c) { return false; }
+    var test = R.depthEnabled && (iz !== undefined);
     x = Math.round(x); y = Math.round(y);
     if (x + c.w < 0 || x >= R.W || y + c.h < 0 || y >= R.H) { return false; }
     // Budget check first. A sprite is accepted or dropped whole, per line.
@@ -209,7 +261,10 @@
         if (src === 0) { continue; }
         var px = x + xx;
         if (px < 0 || px >= R.W) { continue; }
-        R.buf[base + px] = tintShift ? (src + tintShift) : src;
+        var i = base + px;
+        if (test && iz <= R.zbuf[i]) { continue; }
+        if (test) { R.zbuf[i] = iz; }
+        R.buf[i] = tintShift ? (src + tintShift) : src;
       }
     }
     return true;
@@ -218,11 +273,12 @@
   // A cell drawn at an integer scale. Sprite hardware of this era doubled
   // cells rather than filtering them, so scale 2 is pixel replication and
   // nothing else. Still one sprite per scanline against the budget.
-  R.drawCellScaled = function (name, x, y, flipH, scale, tintShift) {
+  R.drawCellScaled = function (name, x, y, flipH, scale, tintShift, iz) {
     scale = Math.max(1, Math.round(scale || 1));
-    if (scale === 1) { return R.drawCell(name, x, y, flipH, tintShift); }
+    if (scale === 1) { return R.drawCell(name, x, y, flipH, tintShift, iz); }
     var c = R.cells[name];
     if (!c) { return false; }
+    var test = R.depthEnabled && (iz !== undefined);
     x = Math.round(x); y = Math.round(y);
     var w = c.w * scale, h = c.h * scale;
     if (x + w < 0 || x >= R.W || y + h < 0 || y >= R.H) { return false; }
@@ -245,7 +301,10 @@
         if (src === 0) { continue; }
         var px = x + xx;
         if (px < 0 || px >= R.W) { continue; }
-        R.buf[base + px] = tintShift ? (src + tintShift) : src;
+        var si = base + px;
+        if (test && iz <= R.zbuf[si]) { continue; }
+        if (test) { R.zbuf[si] = iz; }
+        R.buf[si] = tintShift ? (src + tintShift) : src;
       }
     }
     return true;
@@ -253,9 +312,10 @@
 
   // The far tier. Past the distance where a cell is legible, a sprite is a
   // couple of pixels, which is what the hardware would have done anyway.
-  R.drawSpeck = function (x, y, idx, size) {
+  R.drawSpeck = function (x, y, idx, size, iz) {
     x = Math.round(x); y = Math.round(y);
     size = Math.max(1, size | 0);
+    var test = R.depthEnabled && (iz !== undefined);
     if (y < 0 || y >= R.H) { return false; }
     if (R.spriteLoad[y] >= R.SPRITES_PER_LINE) { R.overflowCount++; return false; }
     for (var yy = 0; yy < size; yy++) {
@@ -268,7 +328,10 @@
       for (var xx = 0; xx < size; xx++) {
         var px = x + xx;
         if (px < 0 || px >= R.W) { continue; }
-        R.buf[py * R.W + px] = idx;
+        var di = py * R.W + px;
+        if (test && iz <= R.zbuf[di]) { continue; }
+        if (test) { R.zbuf[di] = iz; }
+        R.buf[di] = idx;
       }
     }
     return true;
@@ -390,6 +453,122 @@
     '................',
     '................'
   ], { 1: C.black.start });
+
+  // Conifer: darker, narrower, and it belongs higher up the hill.
+  R.defineCell('conifer', [
+    '................',
+    '.......1........',
+    '.......11.......',
+    '......111.......',
+    '......1111......',
+    '.....11111......',
+    '.....111111.....',
+    '....1111111.....',
+    '....11111111....',
+    '...111111111....',
+    '...1111111111...',
+    '..111111111111..',
+    '.......22.......',
+    '.......22.......',
+    '.......22.......',
+    '.......22.......'
+  ], { 1: C.grass.start + 1, 2: C.rock.start });
+
+  // A dead tree is a silhouette, which is why it reads at distance.
+  R.defineCell('deadtree', [
+    '................',
+    '................',
+    '.....1....1.....',
+    '......1..1......',
+    '....1..11..1....',
+    '.....1.11.1.....',
+    '.......11.......',
+    '....1..11..1....',
+    '.....1.11.1.....',
+    '.......11.......',
+    '.......11.......',
+    '.......11.......',
+    '.......11.......',
+    '.......11.......',
+    '......1111......',
+    '................'
+  ], { 1: C.rock.start });
+
+  R.defineCell('boulder', [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '.....11111......',
+    '....1122211.....',
+    '...112222211....',
+    '...112222111....',
+    '..11122211111...',
+    '..11111111111...',
+    '...111111111....',
+    '................'
+  ], { 1: C.rock.start + 1, 2: C.rock.start + 2 });
+
+  R.defineCell('haybale', [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '.....22222......',
+    '....2111112.....',
+    '....2111112.....',
+    '....2111112.....',
+    '.....22222......',
+    '................'
+  ], { 1: C.crop.start, 2: C.rock.start + 2 });
+
+  R.defineCell('cow', [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '....11111111....',
+    '...1112211111...',
+    '...1111111111...',
+    '....1.1..1.1....',
+    '....1.1..1.1....',
+    '................',
+    '................'
+  ], { 1: C.mark.start, 2: C.rock.start });
+
+  R.defineCell('post', [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '.......1........',
+    '.......1........',
+    '.......1........',
+    '.......1........',
+    '.......1........',
+    '.......1........',
+    '................'
+  ], { 1: C.rock.start });
 
   R.defineCell('tree', [
     '................',

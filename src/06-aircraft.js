@@ -1,4 +1,4 @@
-// AERODROME :: src/06-aircraft.js :: v1.4.0
+// AERODROME :: src/06-aircraft.js :: v1.10.0
 // Aircraft parameter blocks. Data only. The integrator never reads a name
 // from this file, only capability flags and numbers.
 // Depends on 00-core.js.
@@ -224,6 +224,8 @@
 
   stock.warbird = {
     id: 'warbird',
+    // An open cockpit: no roof, high sills, a headrest behind you.
+    cockpit: { roof: 0, halfW: 0.46, sill: 0.34, nose: 0.72, coaming: 0.34, rear: 0.42 },
     limits: { qMax: 17000, gearN: 210000 },
     name: 'STANCHION P-4',
     kind: 'Warbird',
@@ -269,6 +271,7 @@
 
   stock.jet = {
     id: 'jet',
+    cockpit: { halfW: 0.46, roof: 0.62, sill: 0.5, nose: 0.78, postX: 0.40, postW: 0.045 },
     limits: { qMax: 58000, gearN: 480000 },
     name: 'PICKET F-9',
     kind: 'Jet interceptor',
@@ -313,6 +316,8 @@
 
   stock.sailplane = {
     id: 'sailplane',
+    // A glider canopy is nearly all glass, so the structure is minimal.
+    cockpit: { halfW: 0.40, roof: 0.44, sill: 0.40, nose: 0.66, postW: 0.035, postX: 0.34 },
     towable: { restLen: 48, k: 1200, c: 800, maxN: 12000, releaseAltM: 700 },
     limits: { qMax: 5200, gearN: 26000 },
     name: 'LONG MEADOW',
@@ -352,6 +357,8 @@
 
   stock.balloon = {
     id: 'balloon',
+    // A basket, which is a rail all the way round and nothing above it.
+    cockpit: { roof: 0, halfW: 0.58, sill: 0.30, nose: 0.58, coaming: 0.26, rear: 0.58, trim: 'accent' },
     name: 'SLOW ARGUMENT',
     kind: 'Hot air balloon',
     blurb: 'Burner and vent. Everything else is the wind having an opinion.',
@@ -428,6 +435,7 @@
 
   stock.saucer = {
     id: 'saucer',
+    cockpit: { halfW: 0.66, roof: 0.66, sill: 0.52, nose: 0.70, postX: 0.56, postW: 0.04, trim: 'glass' },
     name: 'PLATE 6',
     kind: 'Flying saucer',
     blurb: 'Reaction thrust in any direction. No stall, no engine note, no manual.',
@@ -455,6 +463,8 @@
 
   stock.helicopter = {
     id: 'helicopter',
+    // A bubble: thin posts, a low sill and a lot of glass under your feet.
+    cockpit: { halfW: 0.54, roof: 0.58, sill: 0.58, nose: 0.60, postX: 0.48, postW: 0.038 },
     name: 'DERRICK 12',
     kind: 'Helicopter',
     blurb: 'Collective, cyclic, pedals. Chop the throttle and autorotate.',
@@ -496,6 +506,7 @@
 
   stock.autogyro = {
     id: 'autogyro',
+    cockpit: { roof: 0, halfW: 0.44, sill: 0.32, nose: 0.62, coaming: 0.28, rear: 0.40 },
     name: 'PENNY FARTHING',
     kind: 'Autogyro',
     blurb: 'Unpowered rotor, powered prop. It genuinely cannot stall.',
@@ -546,6 +557,7 @@
 
   stock.ornithopter = {
     id: 'ornithopter',
+    cockpit: { roof: 0, halfW: 0.40, sill: 0.28, nose: 0.54, coaming: 0.24, rear: 0.38 },
     name: 'MAYFLY',
     kind: 'Ornithopter',
     blurb: 'Altitude sawtooths with every beat. Trust the average, not the moment.',
@@ -581,6 +593,7 @@
 
   stock.paper = {
     id: 'paper',
+    cockpit: { roof: 0, halfW: 0.34, sill: 0.22, nose: 0.46, coaming: 0.18, rear: 0.30, trim: 'white', mat: 'white' },
     name: 'FOLDED NOTE',
     kind: 'Paper airplane',
     blurb: 'Eight grams. Weight shift only. The gusts are in charge.',
@@ -612,6 +625,7 @@
 
   stock.rocket = {
     id: 'rocket',
+    cockpit: { halfW: 0.44, roof: 0.50, sill: 0.46, nose: 0.68, postX: 0.38, postW: 0.05 },
     limits: { qMax: 90000 },
     name: 'PARABOLA X',
     kind: 'Lifting body rocket',
@@ -742,6 +756,68 @@
   };
 
   // Deep copies keep the stock table pristine so reset to stock always works.
+  // ------------------------------------------------------- cockpit interior
+  // Built from a small spec rather than authored twelve times. Everything is
+  // measured from the eye point, because that is the only place in the
+  // aircraft where the numbers have to be right.
+  //
+  // The panel and its instruments stay in screen space. This is the structure
+  // around them: coaming, posts, roof, sills and the bulkhead behind you,
+  // which is what gives head look something to move against.
+  // These are in metres from the eye, and they matter: a post half a metre
+  // from your face fills a third of the windscreen, which is why the first
+  // version of this looked like flying a wardrobe.
+  AC.COCKPIT_DEFAULT = {
+    halfW: 0.55,      // half width of the cabin at the eye
+    sill: 0.42,       // window sill below the eye
+    roof: 0.62,       // roof above the eye, zero for an open cockpit
+    nose: 0.86,       // coaming and windscreen this far forward
+    coaming: 0.32,    // how far the coaming stands below the eye
+    rear: 0.95,       // bulkhead behind the eye
+    postW: 0.038,     // window post thickness
+    postX: 0.50,      // post offset either side
+    mat: 'dark',
+    trim: 'hull'
+  };
+
+  AC.cockpitSpec = function (ac) {
+    var spec = {};
+    Object.keys(AC.COCKPIT_DEFAULT).forEach(function (k) { spec[k] = AC.COCKPIT_DEFAULT[k]; });
+    if (ac.cockpit) {
+      Object.keys(ac.cockpit).forEach(function (k) { spec[k] = ac.cockpit[k]; });
+    }
+    return spec;
+  };
+
+  AC.interiorFor = function (ac) {
+    if (ac._interior) { return ac._interior; }
+    var s = AC.cockpitSpec(ac);
+    var e = ac.eye || [0, 0, 0];
+    var ex = e[0], ey = e[1], ez = e[2];
+    var faces = [];
+    function box(cx, cy, cz, hx, hy, hz, mat) {
+      faces = faces.concat(mk.box(ex + cx, ey + cy, ez + cz, hx, hy, hz, mat || s.mat));
+    }
+    // The coaming: the dark shelf the instruments sit behind.
+    box(s.nose * 0.6, -s.coaming - 0.10, 0, s.nose * 0.6, 0.10, s.halfW, s.mat);
+    // Sills either side, running fore and aft.
+    box(s.nose * 0.1, -s.sill, s.halfW, s.nose * 0.95, 0.07, 0.06, s.trim);
+    box(s.nose * 0.1, -s.sill, -s.halfW, s.nose * 0.95, 0.07, 0.06, s.trim);
+    // Window posts, leaning back from the coaming to the roof line.
+    if (s.roof > 0) {
+      var postH = (s.roof + s.sill) * 0.5;
+      box(s.nose * 0.95, (s.roof - s.sill) * 0.5, s.postX, s.postW, postH, s.postW, s.mat);
+      box(s.nose * 0.95, (s.roof - s.sill) * 0.5, -s.postX, s.postW, postH, s.postW, s.mat);
+      // Roof and its front rail.
+      box(-s.rear * 0.1, s.roof, 0, s.nose * 0.9 + s.rear * 0.5, 0.05, s.halfW, s.mat);
+      box(s.nose * 0.92, s.roof - 0.05, 0, 0.05, 0.05, s.halfW, s.mat);
+    }
+    // Bulkhead behind the eye, so looking over your shoulder shows aeroplane.
+    box(-s.rear, -0.18, 0, 0.06, (s.roof > 0 ? s.roof : s.sill) * 0.85, s.halfW, s.trim);
+    ac._interior = { faces: faces };
+    return ac._interior;
+  };
+
   var STOCK_SNAPSHOT = JSON.stringify(AC.ORDER.map(function (id) {
     var d = AC.stock[id], out = {};
     AC.TUNABLE.forEach(function (t) {

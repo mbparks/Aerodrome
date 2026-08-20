@@ -1,4 +1,4 @@
-// AERODROME :: src/13-tests.js :: v1.5.1
+// AERODROME :: src/13-tests.js :: v1.11.0
 // Assertions that must pass before a release is called done. Runs in the
 // browser from the self test button, from tests.html, or headless.
 // Depends on every engine file except the UI and the main loop.
@@ -792,6 +792,609 @@
       U.fillSize(1659, 805, 320, 224).h >= 224 * U.fitScale(1659, 805, 320, 224));
   };
 
+  // ----------------------------------------------------------------- depth
+  // Phase A of the graphics plan. The prize assertion is the last one: a
+  // scene must render the same whatever order its faces arrive in.
+  T.depth = function () {
+    R.setSize(320, 224);
+    var cam = G.makeCamera();
+    cam.pos = V.make(0, 0, 0);
+    cam.quat = Q.fromEuler(0, 0, 0);
+    G.updateCamera(cam);
+
+    function quad(z, half, y) {
+      y = y || 0;
+      return [
+        { x: -half, y: y - half, z: z }, { x: half, y: y - half, z: z },
+        { x: half, y: y + half, z: z }, { x: -half, y: y + half, z: z }
+      ];
+    }
+    var far = quad(900, 400), near = quad(40, 6);
+    var opts = { ambient: 1, noHaze: true, twoSided: true };
+
+    function drawPair(reverse) {
+      R.clear(0);
+      R.clearDepth();
+      G.resetQueue();
+      if (reverse) {
+        G.submitFace(cam, far, 'hull', opts);
+        G.submitFace(cam, near, 'mark', opts);
+      } else {
+        G.submitFace(cam, near, 'mark', opts);
+        G.submitFace(cam, far, 'hull', opts);
+      }
+      G.flushQueue();
+      return R.buf.slice(0, R.W * R.H);
+    }
+    var a = drawPair(false), b = drawPair(true);
+    var centre = a[Math.round(R.H / 2) * R.W + Math.round(R.W / 2)];
+    ok('the nearer polygon wins the pixel', centre === P.RAMP.mark.start, 'index ' + centre);
+    var same = true;
+    for (var i = 0; i < a.length; i++) { if (a[i] !== b[i]) { same = false; break; } }
+    ok('the frame is identical whichever order the faces were submitted in', same);
+
+    // Depth clears to zero, which is behind everything.
+    R.clearDepth();
+    var cleared = true;
+    for (i = 0; i < R.W * R.H; i++) { if (R.zbuf[i] !== 0) { cleared = false; break; } }
+    ok('the depth buffer clears to behind everything', cleared);
+
+    // Inverse depth: nearer is larger, and it is what the buffer holds.
+    var pNear = G.project(cam, { x: 0, y: 0, z: 10 });
+    var pFar = G.project(cam, { x: 0, y: 0, z: 1000 });
+    ok('inverse depth is larger for nearer things', pNear.iz > pFar.iz && pFar.iz > 0,
+      pNear.iz.toFixed(4) + ' against ' + pFar.iz.toFixed(5));
+    R.clear(0);
+    R.clearDepth();
+    G.resetQueue();
+    G.submitFace(cam, quad(60, 30), 'hull', opts);
+    G.flushQueue();
+    var mid = Math.round(R.H / 2) * R.W + Math.round(R.W / 2);
+    ok('filling a face writes depth', Math.abs(R.zbuf[mid] - 1 / 60) < 1e-4,
+      R.zbuf[mid].toFixed(5));
+
+    // A sprite behind a wall is behind the wall. This is the bug that put a
+    // tree in front of the hill it was standing on.
+    function spriteAgainstWall(spriteZ) {
+      R.clear(0);
+      R.clearDepth();
+      R.spriteLoad.fill(0, 0, R.H);
+      G.resetQueue();
+      G.submitFace(cam, quad(100, 300), 'hull', opts);
+      G.flushQueue();
+      var before = countIndex(P.RAMP.hull.start, 6);
+      G.drawBillboard(cam, 'tree', { x: 0, y: 0, z: spriteZ }, false);
+      return before - countIndex(P.RAMP.hull.start, 6);
+    }
+    ok('a sprite behind a wall draws nothing', spriteAgainstWall(400) === 0);
+    ok('a sprite in front of a wall draws', spriteAgainstWall(30) > 0,
+      spriteAgainstWall(30) + ' pixels');
+
+    // Coplanar detail sits on its surface rather than fighting with it.
+    R.clear(0);
+    R.clearDepth();
+    G.resetQueue();
+    var ground = [
+      { x: -200, y: 0, z: 20 }, { x: 200, y: 0, z: 20 },
+      { x: 200, y: 0, z: 400 }, { x: -200, y: 0, z: 400 }
+    ];
+    var stripe = [
+      { x: -3, y: 0, z: 30 }, { x: 3, y: 0, z: 30 },
+      { x: 3, y: 0, z: 380 }, { x: -3, y: 0, z: 380 }
+    ];
+    cam.pos = V.make(0, 30, 0);
+    G.updateCamera(cam);
+    G.submitFace(cam, stripe, 'mark', { ambient: 1, noHaze: true, twoSided: true, zlift: 0.004 });
+    G.submitFace(cam, ground, 'tarmac', { ambient: 1, noHaze: true, twoSided: true });
+    G.flushQueue();
+    ok('a marking lifted in depth survives the surface it is painted on',
+      countIndex(P.RAMP.mark.start, 1) > 40, countIndex(P.RAMP.mark.start, 1) + ' pixels');
+
+    // Depth can be switched off for screen space work, and then order rules.
+    R.clear(0);
+    R.clearDepth();
+    R.depthEnabled = false;
+    R.fillPoly([{ x: 0, y: 0, iz: 0.001 }, { x: 100, y: 0, iz: 0.001 },
+      { x: 100, y: 60, iz: 0.001 }, { x: 0, y: 60, iz: 0.001 }], 9);
+    R.depthEnabled = true;
+    ok('depth can be switched off for screen space drawing', R.get(50, 30) === 9);
+  };
+
+  function countIndex(start, len) {
+    var n = 0;
+    for (var i = 0; i < R.W * R.H; i++) {
+      if (R.buf[i] >= start && R.buf[i] < start + len) { n++; }
+    }
+    return n;
+  }
+
+  // ------------------------------------------------------------------ land
+  // Phase B of the graphics plan: what the ground is made of, and why it is
+  // the shape it is.
+  T.land = function () {
+    // Every material the world can name has to exist in the renderer, or a
+    // hillside silently becomes hull grey.
+    var named = ['tarmac', 'water', 'sand', 'rock', 'scree', 'crop', 'plough',
+      'meadow', 'hedge', 'grass'];
+    var missing = named.filter(function (m) {
+      return !G.MATERIALS[m] || !P.RAMP[G.MATERIALS[m].ramp];
+    });
+    ok('every land material exists and names a real ramp', missing.length === 0, missing.join(', '));
+
+    // The world palette has no wasted entries: two grass shades used to
+    // quantize to the same nine bit color, which is what paid for sand.
+    var seen = {}, dupes = 0;
+    for (var i = 1; i < 16; i++) {
+      if (seen[P.codes[i]]) { dupes++; }
+      seen[P.codes[i]] = 1;
+    }
+    ok('no two world palette entries are the same color', dupes === 0, dupes + ' duplicates');
+
+    // Materials by what the ground is doing.
+    var rz = 0, rx = W.riverX(rz);
+    ok('the river bed is water', W.materialAt(rx, rz, W.FLOOR) === 'water');
+    ok('the bank is sand', W.materialAt(rx + 72, rz, W.FLOOR) === 'sand',
+      W.materialAt(rx + 72, rz, W.FLOOR));
+    ok('the runway is tarmac', W.materialAt(0, 0, W.RUNWAY.elev) === 'tarmac');
+
+    // Somewhere on the ridge flank is steep enough to be bare.
+    var bare = 0, checked = 0;
+    for (var x = W.RIDGE_X - 400; x < W.RIDGE_X + 400; x += 25) {
+      var h = W.heightAt(x, -200);
+      var m = W.materialAt(x, -200, h);
+      checked++;
+      if (m === 'rock' || m === 'scree') { bare++; }
+    }
+    ok('steep ground shows stone rather than grass', bare > 0 && bare < checked,
+      bare + ' of ' + checked + ' samples');
+
+    // Farmland exists near the town and nowhere else.
+    var farm = 0;
+    for (var k = 0; k < 400; k++) {
+      var fx = W.TOWN.x + (Math.random() - 0.5) * 1000;
+      var fz = W.TOWN.z + (Math.random() - 0.5) * 1000;
+      var fm = W.materialAt(fx, fz, W.heightAt(fx, fz));
+      if (fm === 'crop' || fm === 'plough' || fm === 'hedge') { farm++; }
+    }
+    ok('there are fields around the town', farm > 20, farm + ' of 400 samples');
+    ok('and none out on the ridge',
+      !W.fieldAt(W.RIDGE_X, -1200) && !!W.fieldAt(W.TOWN.x, W.TOWN.z));
+    var f0 = W.fieldAt(W.TOWN.x + 10, W.TOWN.z + 10);
+    var f1 = W.fieldAt(W.TOWN.x + 10 + W.FIELD.size, W.TOWN.z + 10);
+    ok('neighbouring fields are different fields', f0 && f1 && f0.cu !== f1.cu);
+
+    // Drainage. Water runs downhill and where a lot of it passes, the ground
+    // is lower, so the carve has to be deeper in the low ground.
+    W.buildErosion();
+    var lowSum = 0, lowN = 0, highSum = 0, highN = 0, negative = 0;
+    for (x = -3000; x <= 3000; x += 150) {
+      for (var z = -3000; z <= 3000; z += 150) {
+        var c = W.carveAt(x, z);
+        if (c < 0) { negative++; }
+        var hh = W.heightAt(x, z);
+        if (hh < W.FLOOR + 60) { lowSum += c; lowN++; }
+        else if (hh > W.FLOOR + 200) { highSum += c; highN++; }
+      }
+    }
+    ok('erosion never raises the ground', negative === 0);
+    ok('drainage cuts deeper where the water collects',
+      lowN > 0 && highN > 0 && (lowSum / lowN) > (highSum / highN),
+      (lowSum / lowN).toFixed(1) + ' m low against ' + (highSum / highN).toFixed(1) + ' m high');
+    ok('the runway is still flat after erosion',
+      Math.abs(W.heightAt(0, -400) - W.RUNWAY.elev) < 0.6
+      && Math.abs(W.heightAt(0, 400) - W.RUNWAY.elev) < 0.6);
+    ok('the ridge is still the high ground',
+      W.heightAt(W.RIDGE_X, 0) > W.heightAt(0, 0) + 200);
+
+    // The tile height cache has to agree with the ground the aeroplane lands on.
+    var agree = true;
+    for (k = 0; k < 200; k++) {
+      var cx = (Math.random() - 0.5) * 4000, cz = (Math.random() - 0.5) * 4000;
+      if (Math.abs(W.heightCached(cx, cz) - W.heightAt(cx, cz)) > 1e-9) { agree = false; }
+    }
+    ok('the cached terrain height is the same terrain height', agree);
+  };
+
+  // ------------------------------------------------------------- populate
+  // Phase C of the graphics plan: things to look at, and whether they are
+  // arranged like country or like confetti.
+  T.populate = function () {
+    // Every builder the world file may name has to build something.
+    var broken = [];
+    Object.keys(W.BUILDERS).forEach(function (type) {
+      var spec = {
+        type: type, x: 300, z: 300, rotDeg: 20, radius: 20, tiltDeg: 10,
+        w: 12, h: 9, d: 12, mat: 'hull', height: 40, count: 4, span: 80, length: 100
+      };
+      var o;
+      try { o = W.BUILDERS[type](spec); } catch (e) { broken.push(type + ': ' + e.message); return; }
+      if (!o || !o.mesh || !o.mesh.faces || !o.mesh.faces.length) { broken.push(type + ': no faces'); return; }
+      if (!isFinite(o.pos.x) || !isFinite(o.pos.y) || !isFinite(o.pos.z)) { broken.push(type + ': bad position'); }
+      for (var f = 0; f < o.mesh.faces.length; f++) {
+        var v = o.mesh.faces[f].v;
+        if (!v || v.length < 3) { broken.push(type + ': degenerate face'); break; }
+        for (var k = 0; k < v.length; k++) {
+          if (!isFinite(v[k][0]) || !isFinite(v[k][1]) || !isFinite(v[k][2])) {
+            broken.push(type + ': non finite vertex'); break;
+          }
+        }
+      }
+    });
+    ok('every structure type builds', broken.length === 0, broken.join('; '));
+    ok('the vocabulary is worth having', Object.keys(W.BUILDERS).length >= 12,
+      Object.keys(W.BUILDERS).length + ' types');
+
+    // Everything the stock valley asks for must be a type that exists.
+    var unknown = W.STOCK.structures.filter(function (st) { return !W.BUILDERS[st.type]; });
+    ok('the stock valley only asks for types that exist', unknown.length === 0);
+    var kinds = {};
+    W.STOCK.structures.forEach(function (st) { kinds[st.type] = 1; });
+    ok('and it uses most of the vocabulary', Object.keys(kinds).length >= 8,
+      Object.keys(kinds).length + ' types placed');
+
+    // Every sprite the scatter can ask for has to be a cell that exists.
+    W.build();
+    var missingCells = {};
+    W.scatter.forEach(function (sc) { if (!R.cells[sc.cell]) { missingCells[sc.cell] = 1; } });
+    ok('every scattered sprite names a cell that exists',
+      Object.keys(missingCells).length === 0, Object.keys(missingCells).join(', '));
+    var used = {};
+    W.scatter.forEach(function (sc) { used[sc.cell] = (used[sc.cell] || 0) + 1; });
+    ok('the valley grows more than one thing', Object.keys(used).length >= 5,
+      Object.keys(used).join(', '));
+
+    // Clustering. Bin the scatter and compare the spread of the bin counts
+    // with what pure chance would give. Woodland is lumpy; confetti is not.
+    // Empty bins have to be counted too, or the distribution is truncated and
+    // the variance means nothing.
+    // Bin at the scale of the density field, since clustering is a statement
+    // about a scale: at 600 metres, woods and clearings are the feature.
+    var span = W.params.scatter.spread, cell = 600;
+    var side = Math.ceil(span / cell);
+    var grid = new Array(side * side);
+    for (var g = 0; g < grid.length; g++) { grid[g] = 0; }
+    W.scatter.forEach(function (sc) {
+      var bx = Math.floor((sc.x + span / 2) / cell);
+      var bz = Math.floor((sc.z + span / 2) / cell);
+      if (bx < 0 || bz < 0 || bx >= side || bz >= side) { return; }
+      grid[bz * side + bx]++;
+    });
+    var counts = grid;
+    var mean = counts.reduce(function (a, b) { return a + b; }, 0) / counts.length;
+    var varr = counts.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / counts.length;
+    // For a uniform sprinkle the variance equals the mean. Clustered placement
+    // pushes it well above.
+    ok('the scatter is clustered rather than sprinkled', varr > mean * 1.6,
+      'variance ' + varr.toFixed(1) + ' against mean ' + mean.toFixed(1));
+
+    // Nothing grows in the river, on the runway or in a ploughed field.
+    var wrong = 0;
+    W.scatter.forEach(function (sc) {
+      var m = W.materialAt(sc.x, sc.z, sc.y);
+      if (m === 'water' || m === 'tarmac' || m === 'plough') { wrong++; }
+      if (sc.cell === 'haybale' && m !== 'crop') { wrong++; }
+    });
+    ok('nothing grows in the river or on the runway', wrong === 0, wrong + ' misplaced');
+
+    // Cattle are in the fields near the farm, not spread over the valley.
+    var strays = W.scatter.filter(function (sc) {
+      return sc.cell === 'cow' && !W.fieldAt(sc.x, sc.z);
+    });
+    ok('the cattle are in their fields', strays.length === 0, strays.length + ' loose');
+
+    // A world file with the new structures in it still round trips.
+    var text = W.exportWorld();
+    var res = W.loadWorld(JSON.parse(text));
+    ok('the larger world still round trips', res.ok && W.exportWorld() === text, res.reason);
+  };
+
+  // ------------------------------------------------------------------- air
+  // Phase D of the graphics plan: where the light falls and what the air does
+  // to what you can see through it.
+  T.air = function () {
+    W.build();
+    ok('the skyline map is built', !!W.HORIZON.grid,
+      W.HORIZON.grid ? W.HORIZON.grid.length + ' entries' : 'missing');
+    var bounded = true;
+    for (var i = 0; i < W.HORIZON.grid.length; i += 97) {
+      if (W.HORIZON.grid[i] > 180) { bounded = false; }
+    }
+    ok('no skyline stands higher than ninety degrees', bounded);
+
+    // Overhead sun lights everything that is not underground.
+    var noon = X.sunDirection(12);
+    var openX = 2200, openZ = -2200;
+    ok('at noon the valley is in full sun',
+      W.sunlightAt(openX, openZ, noon) > 0.95 && W.sunlightAt(0, 0, noon) > 0.95,
+      W.sunlightAt(openX, openZ, noon).toFixed(2));
+
+    // A low evening sun in the west leaves the ground east of the ridge in
+    // shadow while the ridge top is still lit.
+    var evening = X.sunDirection(18.9);
+    var lee = W.sunlightAt(W.RIDGE_X + 700, 0, evening);
+    var top = W.sunlightAt(W.RIDGE_X, 0, evening);
+    ok('the lee of the ridge falls into shadow before the top does', lee < top,
+      'lee ' + lee.toFixed(2) + ', top ' + top.toFixed(2));
+    ok('after sunset nothing is lit', W.sunlightAt(0, 0, X.sunDirection(23)) === 0);
+
+    // Cloud shadows drift and stay in range.
+    var inRange = true, varies = false, drifts = false;
+    var wind = { x: 8, y: 0, z: 3 };
+    var a0 = W.cloudShadowAt(0, 0, 0, wind);
+    for (var k = 0; k < 200; k++) {
+      var v = W.cloudShadowAt(k * 37, k * 53, 0, wind);
+      if (v < 0 || v > 1) { inRange = false; }
+      if (Math.abs(v - a0) > 0.2) { varies = true; }
+    }
+    if (Math.abs(W.cloudShadowAt(0, 0, 400, wind) - a0) > 0.05) { drifts = true; }
+    ok('cloud shade stays between full sun and full shade', inRange);
+    ok('it varies across the ground', varies);
+    ok('and it drifts with the wind', drifts);
+    ok('it is the same field every time it is asked',
+      W.cloudShadowAt(123, 456, 7, wind) === W.cloudShadowAt(123, 456, 7, wind));
+
+    // Height haze. Two identical faces at the same distance, one told it sits
+    // in the low ground, must not come out looking the same.
+    R.setSize(320, 224);
+    var cam = G.makeCamera();
+    cam.pos = V.make(0, 0, 0);
+    cam.quat = Q.fromEuler(0, 0, 0);
+    G.updateCamera(cam);
+    var hazeColor = P.RAMP.sky.start + P.RAMP.sky.len - 1;
+    function hazedPixels(boost) {
+      R.clear(0);
+      R.clearDepth();
+      G.resetQueue();
+      G.submitFace(cam, [
+        { x: -300, y: -200, z: 5200 }, { x: 300, y: -200, z: 5200 },
+        { x: 300, y: 200, z: 5200 }, { x: -300, y: 200, z: 5200 }
+      ], 'grass', { ambient: 1, twoSided: true, hazeBoost: boost });
+      G.flushQueue();
+      var n = 0;
+      for (var q = 0; q < R.W * R.H; q++) { if (R.buf[q] === hazeColor) { n++; } }
+      return n;
+    }
+    var low = hazedPixels(0.5), high = hazedPixels(0);
+    ok('the low ground hazes out before the high ground does', low > high,
+      low + ' hazed pixels against ' + high);
+
+    // Glare brightens the sky around the sun and never paints on top of it.
+    R.clear(P.RAMP.sky.start + 3);
+    R.clearDepth();
+    var gcam = G.makeCamera();
+    gcam.pos = V.make(0, 500, 0);
+    var sd = X.sunDirection(9);
+    gcam.quat = AERO.camera.lookAt(gcam.pos,
+      { x: gcam.pos.x - sd.x * 1000, y: gcam.pos.y - sd.y * 1000, z: gcam.pos.z - sd.z * 1000 },
+      { x: 0, y: 1, z: 0 });
+    G.updateCamera(gcam);
+    G.drawSun(gcam, { sunDir: sd, hour: 9, ambient: 1 });
+    var brighter = 0, outside = 0;
+    var sky0 = P.RAMP.sky.start, sky1 = sky0 + P.RAMP.sky.len - 1;
+    for (i = 0; i < R.W * R.H; i++) {
+      var px = R.buf[i];
+      if (px > P.RAMP.sky.start + 3 && px <= sky1) { brighter++; }
+      if (px > sky1 && px < P.RAMP.sun.start) { outside++; }
+    }
+    ok('glare brightens the sky around the sun', brighter > 200, brighter + ' pixels');
+    ok('and never leaves the sky ramp to do it', outside === 0, outside + ' strays');
+  };
+
+  // --------------------------------------------------------------- cockpit
+  // The interior is geometry now, which means it can be wrong in all the ways
+  // geometry can be wrong.
+  T.cockpit = function () {
+    var bad = [], tooClose = [];
+    AC.list().forEach(function (ac) {
+      var m = AC.interiorFor(ac);
+      if (!m || !m.faces || !m.faces.length) { bad.push(ac.id + ': empty'); return; }
+      var near = 1e9;
+      m.faces.forEach(function (f) {
+        f.v.forEach(function (v) {
+          if (!isFinite(v[0]) || !isFinite(v[1]) || !isFinite(v[2])) { bad.push(ac.id + ': non finite'); }
+          var dx = v[0] - ac.eye[0], dy = v[1] - ac.eye[1], dz = v[2] - ac.eye[2];
+          var d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (d < near) { near = d; }
+        });
+      });
+      // Nothing may be built inside the pilot's head.
+      if (near < 0.3) { tooClose.push(ac.id + ' at ' + near.toFixed(2) + ' m'); }
+    });
+    ok('every aircraft has an interior', bad.length === 0, bad.join('; '));
+    ok('and none of it is inside the pilot', tooClose.length === 0, tooClose.join('; '));
+
+    // An open cockpit is open. Nothing of the interior may sit above the eye.
+    var open = ['warbird', 'balloon', 'autogyro', 'ornithopter', 'paper'];
+    var roofed = open.filter(function (id) {
+      var ac = AC.byId(id), m = AC.interiorFor(ac), over = false;
+      m.faces.forEach(function (f) {
+        f.v.forEach(function (v) { if (v[1] > ac.eye[1] + 0.25) { over = true; } });
+      });
+      return over;
+    });
+    ok('an open cockpit has nothing over your head', roofed.length === 0, roofed.join(', '));
+    var closed = ['trainer', 'jet', 'helicopter', 'sailplane'];
+    var unroofed = closed.filter(function (id) {
+      var ac = AC.byId(id), m = AC.interiorFor(ac), over = false;
+      m.faces.forEach(function (f) {
+        f.v.forEach(function (v) { if (v[1] > ac.eye[1] + 0.3) { over = true; } });
+      });
+      return !over;
+    });
+    ok('and a closed one has a roof', unroofed.length === 0, unroofed.join(', '));
+
+    // The interior occludes the world, which is the whole reason it is
+    // geometry rather than a picture.
+    R.setSize(320, 224);
+    var ac0 = AC.byId('trainer');
+    // Sit the camera in the pilot's seat, looking where the aeroplane looks.
+    // The aircraft is submitted with a heading quaternion, so body forward
+    // becomes north, and the eye has to be rotated the same way.
+    var acQuat = Q.fromEuler(0, 0, 0);
+    var eyeW = Q.rotate(acQuat, { x: ac0.eye[0], y: ac0.eye[1], z: ac0.eye[2] });
+    var cam = G.makeCamera();
+    cam.pos = V.make(eyeW.x, eyeW.y, eyeW.z);
+    cam.quat = acQuat;
+    G.updateCamera(cam);
+    function wallPixels(withInterior) {
+      R.clear(0);
+      R.clearDepth();
+      G.resetQueue();
+      G.submitFace(cam, [
+        { x: -400, y: -400, z: 600 }, { x: 400, y: -400, z: 600 },
+        { x: 400, y: 400, z: 600 }, { x: -400, y: 400, z: 600 }
+      ], 'grass', { ambient: 1, twoSided: true, noHaze: true });
+      if (withInterior) {
+        G.submitMesh(cam, AC.interiorFor(ac0), V.zero(), acQuat,
+          { ambient: 0.4, noHaze: true, twoSided: true });
+      }
+      G.flushQueue();
+      var n = 0;
+      for (var i = 0; i < R.W * R.H; i++) {
+        if (R.buf[i] >= P.RAMP.grass.start && R.buf[i] < P.RAMP.grass.start + P.RAMP.grass.len) { n++; }
+      }
+      return n;
+    }
+    var bare = wallPixels(false), framed = wallPixels(true);
+    ok('the cockpit hides part of the world behind it', framed < bare && framed > bare * 0.3,
+      framed + ' of ' + bare + ' pixels left');
+
+    // Edge on slivers close to the eye are culled, but thin geometry at a
+    // distance is not, because at a distance thin geometry is a power line.
+    var scam = G.makeCamera();
+    scam.pos = V.zero();
+    scam.quat = Q.fromEuler(0, 0, 0);
+    G.updateCamera(scam);
+    function sliverPixels(dist) {
+      R.clear(0);
+      R.clearDepth();
+      G.resetQueue();
+      G.submitFace(scam, [
+        { x: 0, y: -30, z: dist }, { x: 0, y: 30, z: dist },
+        { x: 0, y: 30, z: dist + 40 }, { x: 0, y: -30, z: dist + 40 }
+      ], 'dark', { ambient: 1, twoSided: true, noHaze: true });
+      G.flushQueue();
+      var n = 0;
+      for (var i = 0; i < R.W * R.H; i++) { if (R.buf[i] === P.RAMP.black.start) { n++; } }
+      return n;
+    }
+    ok('an edge on sliver at arm reach is not drawn', sliverPixels(2.4) === 0);
+    ok('but thin geometry further out still is', sliverPixels(400) > 0,
+      sliverPixels(400) + ' pixels');
+
+    // The panel slides with head look and must not open a gap of sky under it.
+    function bottomRow(off) {
+      R.clear(P.RAMP.sky.start + 3);
+      R.depthEnabled = false;
+      I.drawPanel(ac0, { airspeed: 40, altitude: 300, vsi: 0, heading: 0, fuel: 50 }, 0, {}, off);
+      R.depthEnabled = true;
+      var sky = 0;
+      for (var x = 0; x < R.W; x++) { if (R.buf[(R.H - 1) * R.W + x] === P.RAMP.sky.start + 3) { sky++; } }
+      return sky;
+    }
+    ok('the panel covers the bottom of the screen', bottomRow(null) === 0);
+    ok('and still covers it when head look slides it',
+      bottomRow({ x: 120, y: 40 }) === 0 && bottomRow({ x: -120, y: 40 }) === 0);
+  };
+
+  // ------------------------------------------------------------------ trim
+  // The input milestone. A stick is not a switch, and this is where that is
+  // made true.
+  T.trim = function () {
+    // Dead zone and curve: rest is exactly nothing and full is exactly all.
+    var prof = { dead: 0.12, curve: 0.5, invert: false };
+    ok('rest maps to exactly zero', IN.shape(0, prof) === 0 && IN.shape(0.12, prof) === 0);
+    ok('full deflection maps to exactly one',
+      Math.abs(IN.shape(1, prof) - 1) < 1e-12 && Math.abs(IN.shape(-1, prof) + 1) < 1e-12,
+      IN.shape(1, prof).toFixed(6));
+    ok('anything past full is still one', Math.abs(IN.shape(1.4, prof) - 1) < 1e-12);
+
+    // Monotone, at every curve setting. A stick that reverses halfway through
+    // its travel is worse than no curve at all.
+    var monotone = true, worst = '';
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (c) {
+      var p2 = { dead: 0.1, curve: c, invert: false }, last = -1;
+      for (var v = 0; v <= 1.0001; v += 0.01) {
+        var out = IN.shape(v, p2);
+        if (out < last - 1e-12) { monotone = false; worst = 'curve ' + c + ' at ' + v.toFixed(2); }
+        last = out;
+      }
+    });
+    ok('the response curve is monotone at every setting', monotone, worst);
+
+    // A curve has to actually bend, or it is a slider that does nothing.
+    var lin = IN.shape(0.5, { dead: 0, curve: 0 });
+    var bent = IN.shape(0.5, { dead: 0, curve: 1 });
+    ok('the curve softens the middle of the travel', bent < lin * 0.8,
+      lin.toFixed(3) + ' linear against ' + bent.toFixed(3) + ' curved');
+    ok('inversion flips the sign and nothing else',
+      Math.abs(IN.shape(0.7, { dead: 0.1, curve: 0.4, invert: true })
+        + IN.shape(0.7, { dead: 0.1, curve: 0.4, invert: false })) < 1e-12);
+    ok('a dead zone eats the drift of a worn stick',
+      IN.shape(0.08, { dead: 0.15, curve: 0 }) === 0
+      && IN.shape(0.2, { dead: 0.15, curve: 0 }) > 0);
+
+    // Profiles round trip through the save file, clamped on the way in.
+    var before = IN.exportProfiles();
+    IN.profiles.pitch.dead = 0.33;
+    IN.profiles.roll.curve = 0.8;
+    IN.profiles.yaw.invert = true;
+    var text = JSON.stringify(IN.exportProfiles());
+    IN.resetProfiles();
+    IN.importProfiles(JSON.parse(text));
+    ok('stick response survives a save and load',
+      IN.profiles.pitch.dead === 0.33 && IN.profiles.roll.curve === 0.8 && IN.profiles.yaw.invert === true);
+    IN.importProfiles({ pitch: { dead: 99, curve: -4 }, roll: 'nonsense' });
+    ok('and absurd values are clamped rather than trusted',
+      IN.profiles.pitch.dead <= 0.6 && IN.profiles.pitch.curve >= 0
+      && IN.profiles.roll.curve === IN.defaultProfiles().roll.curve);
+    IN.importProfiles(before);
+
+    // A captured pad binding round trips through the settings file.
+    var keep = IN.exportMap();
+    IN.bind('gear', { key: 'KeyG', pad: { type: 'button', index: 5 } });
+    IN.bind('pitchUp', { key: 'ArrowDown', pad: { type: 'axis', index: 1, dir: -1 } });
+    var mapText = JSON.stringify(IN.exportMap());
+    IN.resetBindings();
+    IN.importMap(JSON.parse(mapText));
+    ok('a pad button binding survives a save and load',
+      IN.bindings.gear.pad && IN.bindings.gear.pad.type === 'button' && IN.bindings.gear.pad.index === 5);
+    ok('so does a pad axis binding, direction and all',
+      IN.bindings.pitchUp.pad && IN.bindings.pitchUp.pad.type === 'axis'
+      && IN.bindings.pitchUp.pad.dir === -1);
+    ok('the description names both halves of a binding',
+      IN.describeBinding('gear').indexOf('G') >= 0
+      && IN.describeBinding('gear').indexOf('button 5') >= 0,
+      IN.describeBinding('gear'));
+
+    // Conflicts are reported.
+    IN.resetBindings();
+    ok('the stock map has no conflicts in it', IN.conflicts().length === 0,
+      JSON.stringify(IN.conflicts()));
+    IN.bind('gear', { key: 'KeyF' });   // already flaps
+    var clash = IN.conflicts();
+    ok('two actions on one key are reported', clash.length === 1
+      && clash[0].actions.length === 2 && clash[0].actions.indexOf('flaps') >= 0,
+      JSON.stringify(clash));
+    IN.bind('gear', { key: 'KeyG', pad: { type: 'button', index: 3 } });
+    IN.bind('flaps', { key: 'KeyF', pad: { type: 'button', index: 3 } });
+    ok('and so are two actions on one pad button',
+      IN.conflicts().some(function (c) { return c.kind === 'pad'; }));
+    IN.resetBindings();
+    IN.importMap(keep);
+
+    // Clearing a binding leaves the action unbound rather than half bound.
+    IN.bind('tow', { key: null, pad: null });
+    ok('a cleared binding reads as unbound', IN.describeBinding('tow') === 'unbound');
+    IN.importMap(keep);
+
+    // Pad selection.
+    IN.usePad(2);
+    ok('a chosen pad is remembered', IN.padIndex === 2);
+    IN.usePad(null);
+    ok('and it can be given back', IN.padIndex === null);
+  };
+
   // ----------------------------------------------------------- legibility
   // The picture is the product. These assertions exist because every one of
   // them failed at least once in a screenshot.
@@ -989,7 +1592,8 @@
     results = [];
     var groups = ['palette', 'raster', 'attitude', 'camera', 'energy', 'trim',
       'airmanship', 'engine', 'damage', 'gradient', 'optics', 'cabinet',
-      'field', 'chrome', 'legibility', 'world', 'storage', 'roster'];
+      'field', 'chrome', 'depth', 'land', 'populate', 'air', 'cockpit',
+      'trim', 'legibility', 'world', 'storage', 'roster'];
     groups.forEach(function (g) {
       try {
         T[g]();
