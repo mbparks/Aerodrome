@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<!-- AERODROME :: tests.html :: v1.0.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AERODROME self test</title>
+<style>
+:root { --field:#0A0F0D; --deck:#121A16; --line:#2A382F; --paper:#DFE8DF; --lamp:#F0B040; --sig:#7ED6A8; --flag:#E4695B; }
+body { background: var(--field); color: var(--paper); font-family: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace; margin: 0; padding: 20px; line-height: 1.5; }
+h1 { font-family: "Arial Narrow", system-ui, sans-serif; text-transform: uppercase; letter-spacing: 0.3em; font-weight: 400; }
+button { min-height: 44px; padding: 8px 16px; background: var(--deck); color: var(--paper); border: 1px solid var(--line); font: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+#summary { margin: 16px 0; font-size: 17px; }
+table { border-collapse: collapse; width: 100%; max-width: 900px; }
+td { border-bottom: 1px solid var(--line); padding: 6px 8px; vertical-align: top; }
+td.v { width: 60px; }
+.pass { color: var(--sig); }
+.fail { color: var(--flag); }
+.detail { color: #93A69A; }
+</style>
+</head>
+<body>
+<h1>Aerodrome self test</h1>
+<p>The same assertions the in application self test button runs. Nothing here touches the network.</p>
+<p><button type="button" id="run">Run the suite</button></p>
+<div id="summary" role="status" aria-live="polite">Not run yet.</div>
+<table id="out"></table>
+
+<script src="src/00-core.js"></script>
+<script src="src/01-palette.js"></script>
+<script src="src/02-raster.js"></script>
+<script src="src/03-render.js"></script>
+<script src="src/04-audio.js"></script>
+<script src="src/05-flight.js"></script>
+<script src="src/06-aircraft.js"></script>
+<script src="src/07-world.js"></script>
+<script src="src/08-weather.js"></script>
+<script src="src/09-camera.js"></script>
+<script src="src/10-instruments.js"></script>
+<script src="src/11-input.js"></script>
+<script src="src/12-storage.js"></script>
+<script src="src/13-tests.js"></script>
+<script>
+// AERODROME :: tests.html runner :: v1.0.0
+(function () {
+  'use strict';
+  var out = document.getElementById('out');
+  var summary = document.getElementById('summary');
+  AERO.storage.load();
+  document.getElementById('run').addEventListener('click', function () {
+    summary.textContent = 'Running...';
+    while (out.firstChild) { out.removeChild(out.firstChild); }
+    setTimeout(function () {
+      var r = AERO.tests.runAll();
+      summary.textContent = r.summary + (r.failed ? ' with ' + r.failed + ' failing' : ', all green');
+      summary.className = r.failed ? 'fail' : 'pass';
+      r.results.forEach(function (x) {
+        var tr = document.createElement('tr');
+        var v = document.createElement('td');
+        v.className = 'v ' + (x.pass ? 'pass' : 'fail');
+        v.textContent = x.pass ? 'pass' : 'FAIL';
+        var n = document.createElement('td');
+        n.textContent = x.name;
+        var d = document.createElement('td');
+        d.className = 'detail';
+        d.textContent = x.detail;
+        tr.appendChild(v); tr.appendChild(n); tr.appendChild(d);
+        out.appendChild(tr);
+      });
+    }, 20);
+  });
+})();
+</script>
+</body>
+</html>
